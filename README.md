@@ -1,12 +1,13 @@
-# Distributed Approximation of Centralized Value Functions: Convergence and Performance Bounds
+# Description
 
-## Instructions
+
+# Instructions
 
  1. Create the Conda environment from the `environment.yml` file.
     ```
     conda env create -f environment.yml
     ```
- 2. If you desire to run experiments using the SUMO traffic simulator, install SUMO and set the ncessary environment variables (the example below sets the `SUMO_HOME` variable in your `./bashrc` file).
+ 2. If you desire to run experiments using the SUMO traffic simulator, install SUMO and set the necessary environment variables (the example below sets the `SUMO_HOME` variable in your `~/.bashrc` file).
     ```
     sudo add-apt-repository ppa:sumo/stable
     sudo apt-get update
@@ -32,6 +33,6 @@
     tensorboard --logdir runs/
     ```
 
-## Acknowledgments
+# Acknowledgments
 
-We would like to thank the contributors of [CleanRL](https://github.com/vwxyzjn/cleanrl) for the base DQN implementation.
+We would like to thank the contributors of [CleanRL](https://github.com/vwxyzjn/cleanrl) for the base DQN implementation. We would also like to thank the contributors of [PettingZoo](https://github.com/Farama-Foundation/PettingZoo) and [sumo-RL](https://github.com/LucasAlegre/sumo-rl) for maintaining MARL environments.
