@@ -1,9 +1,10 @@
 # Description
 
+A repsitory for conducting multi-agent reinforcement learning experiments. 
 
 # Instructions
 
- 1. Create the Conda environment from the `environment.yml` file.
+ 1. Create the Conda environment from the `environment.yml` file. This will install all the necessary python dependencies on your system.
     ```
     conda env create -f environment.yml
     ```
@@ -32,6 +33,24 @@
     ```
     tensorboard --logdir runs/
     ```
+
+# Configuring an Experiment
+
+See [here](https://github.com/HIRO-group/marl-experiments/tree/main/experiments) for examples of experiment configurations.
+
+# Environments
+
+## PettingZoo
+
+This repository primarily conducts experiments on environments from the PettingZoo library. Environments can be specified through configuration arguments. Specific environment configuration parameters are also configurable.
+
+## SUMO
+
+[sumo-RL](https://github.com/LucasAlegre/sumo-rl) is a Python module that wraps the [SUMO traffic simulator](https://www.eclipse.org/sumo/) in a PettingZoo-style API. This allows for a SUMO simulation to be created in the same style as any PettingZoo library. 
+
+### Understanding the Reward Structure of the SUMO Environment
+
+The SUMO environment uses a default reward structure defined [here](https://github.com/LucasAlegre/sumo-rl#rewards). Maximizing the *change* in total weighting times of all vehicles at a given step may not be the most intuitive reward function. While the method of defining the "best" state of traffic may be up for debate, most experiments in this project use the `queue` reward function which returns the negative number of all vehicles stopped in the environment at the current step. Stopped vehicles are generally bad for traffic flow so the agents attempt to minimize this value.
 
 # Acknowledgments
 

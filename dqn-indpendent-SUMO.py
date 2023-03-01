@@ -122,7 +122,7 @@ if __name__ == "__main__":
     parser.add_argument("--maxgreen", dest="max_green", type=int, default=30, required=False, help="Maximum time for green lights in SUMO environment.\n")
     parser.add_argument("--sumo-gui", dest="sumo_gui", action="store_true", default=False, help="Run with visualization on SUMO (may require firewall permissions).\n")
     parser.add_argument("--sumo-seconds", dest="sumo_seconds", type=int, default=10000, required=False, help="Number of simulation seconds. The number of seconds the simulation must end.\n")
-    parser.add_argument("--reward", dest="reward", type=str, default='wait', required=False, help="Reward function: [-r queue] for average queue reward or [-r wait] for waiting time reward.\n")
+    parser.add_argument("--sumo-reward", dest="sumo_reward", type=str, default='wait', required=False, help="Reward function: \nThe 'queue'reward returns the negative number of total vehicles stopped at all agents each step, \nThe 'wait' reward returns the negative number of cummulative seconds that vehicles have been waiting in the episode.\n")
 
 
     # The SUMO environment is slightly different from the defaul PettingZoo envs so set a flag to indicate if the SUMO env is being used
@@ -201,7 +201,7 @@ if using_sumo:
                     max_green=args.max_green,
                     min_green=args.min_green,
                     num_seconds=args.sumo_seconds,
-                    reward_fn='queue', 
+                    reward_fn=args.sumo_reward, 
                     sumo_warnings=False)
 
 else: 
@@ -417,7 +417,6 @@ for global_step in range(args.total_timesteps):
         system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
-        # TODO: May need to do something different for SUMO rewards, the reward structure may be slightly different from other PZ games
         print(f"global_step={global_step}, system_episode_reward={system_episode_reward}")
         diff_1 = uir_1-lir_1
         # var_1 = var_1/(cnt-1e-7)
@@ -435,31 +434,35 @@ for global_step in range(args.total_timesteps):
         print(f"lir2={lir_2}")
         print(f"system_variance2={var_2}")
 
-        for agent in agents:
-            writer.add_scalar("charts/episode_reward/" + agent, episode_rewards[agent], global_step)
-        writer.add_scalar("charts/episode_reward/uir_1", uir_1, global_step)
-        writer.add_scalar("charts/episode_reward/lir_1", lir_1, global_step)
-        writer.add_scalar("charts/episode_reward/diff_1", diff_1, global_step)
-        writer.add_scalar("charts/episode_reward/var_1", var_1, global_step)
-
-        writer.add_scalar("charts/episode_reward/uir_2", uir_2, global_step)
-        writer.add_scalar("charts/episode_reward/lir_2", lir_2, global_step)
-        writer.add_scalar("charts/episode_reward/diff_2", diff_2, global_step)
-        writer.add_scalar("charts/episode_reward/var_2", var_2, global_step)
-
-        writer.add_scalar("charts/epsilon/", epsilon, global_step)
-        writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
         lir_1 = 0
         uir_1 = 0
         var_1 = 0
         cnt = 0
-        with open(f"{csv_dir}/episode_reward.csv", "a", newline="") as csvfile:
-            csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
-            csv_writer.writerow({**episode_rewards, **{'system_episode_reward': system_episode_reward, 'global_step': global_step}})
 
-        # If we're using the SUMO env, also save some data specific to that environment
-        if using_sumo:
-            env.unwrapped.save_csv(sumo_csv, global_step)
+        # Logging should only be done after we've started training, up until then, the agents are just getting experience
+        if global_step > args.learning_starts:
+            for agent in agents:
+                writer.add_scalar("charts/episode_reward/" + agent, episode_rewards[agent], global_step)
+            writer.add_scalar("charts/episode_reward/uir_1", uir_1, global_step)
+            writer.add_scalar("charts/episode_reward/lir_1", lir_1, global_step)
+            writer.add_scalar("charts/episode_reward/diff_1", diff_1, global_step)
+            writer.add_scalar("charts/episode_reward/var_1", var_1, global_step)
+
+            writer.add_scalar("charts/episode_reward/uir_2", uir_2, global_step)
+            writer.add_scalar("charts/episode_reward/lir_2", lir_2, global_step)
+            writer.add_scalar("charts/episode_reward/diff_2", diff_2, global_step)
+            writer.add_scalar("charts/episode_reward/var_2", var_2, global_step)
+
+            writer.add_scalar("charts/epsilon/", epsilon, global_step)
+            writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
+
+            with open(f"{csv_dir}/episode_reward.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
+                csv_writer.writerow({**episode_rewards, **{'system_episode_reward': system_episode_reward, 'global_step': global_step}})
+
+            # If we're using the SUMO env, also save some data specific to that environment
+            if using_sumo:
+                env.unwrapped.save_csv(sumo_csv, global_step)
             
         # Reset the env to continue training            
         obses = env.reset()
