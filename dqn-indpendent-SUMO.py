@@ -12,7 +12,7 @@ Description:
     the environment.
 
 Usage:
-    python dqn-indepndent.py -c experiments/sumo-4x4-dqn-independent.config    
+    python dqn-indepndent-SUMO.py -c experiments/sumo-4x4-dqn-independent.config    
 
 References:
     - https://github.com/LucasAlegre/sumo-rl 
@@ -147,24 +147,6 @@ def one_hot(a, size):
     b[a] = 1
     return b
 
-# class ProcessObsInputEnv(gym.ObservationWrapper):
-#     """
-#     This wrapper handles inputs from `Discrete` and `Box` observation space.
-#     If the `env.observation_space` is of `Discrete` type, 
-#     it returns the one-hot encoding of the state
-#     """
-#     def __init__(self, env):
-#         super().__init__(env)
-#         self.n = None
-#         if isinstance(self.env.observation_space, Discrete):
-#             self.n = self.env.observation_space.n
-#             self.observation_space = Box(0, 1, (self.n,))
-
-#     def observation(self, obs):
-#         if self.n:
-#             return one_hot(np.array(obs), self.n)
-#         return obs
-
 # TRY NOT TO MODIFY: setup the environment
 if args.gpu_id is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
@@ -183,12 +165,12 @@ csv_dir = f"csv/{experiment_name}"
 os.makedirs(nn_dir)
 os.makedirs(csv_dir)
 
+# TRY NOT TO MODIFY: seeding
+device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
+
 # Define an additional output file for the sumo-specific data
 if using_sumo:
     sumo_csv = "{}/_SUMO_alpha{}_gamma{}_{}".format(csv_dir, args.learning_rate, args.gamma, experiment_time)
-
-# TRY NOT TO MODIFY: seeding
-device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
 
 # Instantiate the environment 
 if using_sumo:
@@ -294,11 +276,10 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     return max(slope * t + start_e, end_e)
 
 # Initialize data structures for training
-rb = {} # Dictionary for storing replay buffers (maps agent to a q-network)
+rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
 q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
 target_network = {} # Dictionary for storing target networks (maps agent to a network)
 optimizer = {}  # Dictionary for storing 
-#neighbors = {agent: agents for agent in agents}
 
 for agent in agents:
     observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
@@ -308,7 +289,7 @@ for agent in agents:
     target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
     optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate) # All agents use the same optimizer for training
 
-loss_fn = nn.MSELoss()
+loss_fn = nn.MSELoss() # TODO: should the loss function be configurable?
 print(device.__repr__())
 print(q_network[agent]) # network of last agent
 
@@ -363,14 +344,12 @@ for global_step in range(args.total_timesteps):
 
     # Update the networks for each agent
     for agent in agents:
-
         # The reward for the SUMO environment has been set to return the total (negative) number of cars waiting at each intersection 
         # So we don't want to accumulate it twice
         if using_sumo:
             episode_rewards[agent] = rewards[agent]
         else:
             episode_rewards[agent] += rewards[agent]
-
 
         # ALGO LOGIC: training.
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
@@ -434,11 +413,6 @@ for global_step in range(args.total_timesteps):
         print(f"lir2={lir_2}")
         print(f"system_variance2={var_2}")
 
-        lir_1 = 0
-        uir_1 = 0
-        var_1 = 0
-        cnt = 0
-
         # Logging should only be done after we've started training, up until then, the agents are just getting experience
         if global_step > args.learning_starts:
             for agent in agents:
@@ -466,6 +440,10 @@ for global_step in range(args.total_timesteps):
             
         # Reset the env to continue training            
         obses = env.reset()
+        lir_1 = 0
+        uir_1 = 0
+        var_1 = 0
+        cnt = 0
 
         # Global states
         if args.global_obs:
