@@ -122,6 +122,14 @@ if __name__ == "__main__":
     parser.add_argument("--sumo-seconds", dest="sumo_seconds", type=int, default=10000, required=False, help="Number of simulation seconds. The number of seconds the simulation must end.\n")
     parser.add_argument("--sumo-reward", dest="sumo_reward", type=str, default='wait', required=False, help="Reward function: \nThe 'queue'reward returns the negative number of total vehicles stopped at all agents each step, \nThe 'wait' reward returns the negative number of cummulative seconds that vehicles have been waiting in the episode.\n")
 
+    # Configuration parameters for analyzing sumo env (only used in sumo_analysis.py)
+    parser.add_argument("--analysis-steps", dest="analysis_steps", type=int, default=500, required=False, 
+                        help="The number of time steps at which we want to investigate the perfomance of the algorithm. E.g. display how the training was going at the 10,000 checkpoint. Note there must be a nn .pt file for each agent at this step.\n")
+    parser.add_argument("--nn-directory", dest="nn_directory", type=str, default=None, required=False, 
+                        help="The directory containing the nn .pt files to load for analysis.\n")
+    parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", type=bool, default=False, required=True, 
+                        help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")                        
+
     args = parser.parse_args()
     if not args.seed:
         args.seed = int(time.time())
@@ -154,7 +162,7 @@ def one_hot(a, size):
 # TRY NOT TO MODIFY: setup the environment
 if args.gpu_id is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
-experiment_time = str(datetime.now()).split('.')[0]    
+experiment_time = str(datetime.now()).split('.')[0].replace(':','-')   
 experiment_name = "{}__N{}__exp{}__seed{}__{}".format(args.gym_id, args.N, args.exp_name, args.seed, experiment_time)
 writer = SummaryWriter(f"runs/{experiment_name}")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
