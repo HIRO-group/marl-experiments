@@ -26,7 +26,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-# import argparse
 import configargparse
 from distutils.util import strtobool
 import collections
@@ -262,7 +261,6 @@ class ReplayBuffer():
 class QNetwork(nn.Module):
     def __init__(self, observation_space_shape, action_space_dim):
         super(QNetwork, self).__init__()
-        # hidden_size = num_agents * 64
         hidden_size = 64    # TODO: should we make this a config parameter?
         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
@@ -372,7 +370,7 @@ for global_step in range(args.total_timesteps):
             if global_step % 100 == 0:
                 writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
 
-            # optimize the midel
+            # optimize the model
             optimizer[agent].zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), args.max_grad_norm)
