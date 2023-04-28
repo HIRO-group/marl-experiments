@@ -12,7 +12,7 @@ Description:
     the environment.
 
 Usage:
-    python dqn-greedy.py -c experiments/sumo-4x4-dqn-greedy.config    
+    python dqn-greedy.py -c experiments/sumo-2x2-dqn-greedy.config    
 
 References:
     - https://github.com/LucasAlegre/sumo-rl 
