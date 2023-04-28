@@ -1,8 +1,8 @@
 """
-dqn-empathetic.py
+dqn-greedy.py
 
 Description:
-    Implementation of distributed "empathetic" Q-Learning to be used on various environments from the PettingZoo 
+    Implementation of distributed "greedy" Q-Learning to be used on various environments from the PettingZoo 
     library. This file was modified to support use of the sumo-rl traffic simulator library
     https://github.com/LucasAlegre/sumo-rl which is not technically part of the PettingZoo module but 
     conforms to the Petting Zoo API. Configuration of this script is performed through a configuration file, 
@@ -12,13 +12,12 @@ Description:
     the environment.
 
 Usage:
-    python dqn-empathetic.py -c experiments/sumo-4x4-dqn-empathetic.config    
+    python dqn-greedy.py -c experiments/sumo-4x4-dqn-greedy.config    
 
 References:
     - https://github.com/LucasAlegre/sumo-rl 
     - https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf 
 """
-
 
 import torch
 import torch.nn as nn
@@ -43,8 +42,6 @@ import pettingzoo
 # SUMO dependencies
 import sumo_rl
 import sys
-
-
 
 if __name__ == "__main__":
     parser = configargparse.ArgParser(default_config_files=['experiments/sumo-4x4-independent.config'], description='DQN agent')
@@ -132,7 +129,8 @@ if __name__ == "__main__":
                         help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
 
     # The SUMO environment is slightly different from the defaul PettingZoo envs so set a flag to indicate if the SUMO env is being used
-    args = parser.parse_args()
+    args = parser.parse_args()    
+    
     using_sumo = False  
     if args.gym_id == 'sumo':
 
@@ -171,7 +169,6 @@ csv_dir = f"csv/{experiment_name}"
 os.makedirs(nn_dir)
 os.makedirs(csv_dir)
 
-
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
 
@@ -195,7 +192,7 @@ if using_sumo:
 
 else: 
     exec(f"import pettingzoo.{args.gym_id}") # lol
-    exec(f"env = pettingzoo.{args.gym_id}.parallel_env(N={args.N}, local_ratio=0.5, max_cycles={args.max_cycles}, continuous_actions=False)") # lol
+    exec(f"env = pettingzoo.{args.gym_id}.parallel_env({args.env_args})") # lol
 
 agents = env.possible_agents
 num_agents = len(env.possible_agents)
@@ -208,7 +205,6 @@ print(" > agents: {}".format(agents))
 print(" > num_agents: {}".format(num_agents))
 print(" > action_spaces: {}".format(action_spaces))
 print(" > observation_spaces: {}".format(observation_spaces))
-
 
 with open(f"{csv_dir}/td_loss.csv", "w", newline="") as csvfile:
     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
@@ -227,7 +223,7 @@ env.reset(seed=args.seed)
 for agent in agents:
     action_spaces[agent].seed(args.seed)
     observation_spaces[agent].seed(args.seed)
-    # assert isinstance(action_spaces[agent], Discrete), "only discrete action space is supported"
+    #assert isinstance(action_spaces[agent], Discrete), "only discrete action space is supported"
 # respect the default timelimit
 # assert isinstance(env.action_space, Discrete), "only discrete action space is supported"
 # TODO: Monitor was not working 
@@ -262,7 +258,7 @@ class ReplayBuffer():
 class QNetwork(nn.Module):
     def __init__(self, observation_space_shape, action_space_dim):
         super(QNetwork, self).__init__()
-        hidden_size =  64
+        hidden_size = 64
         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, action_space_dim)
@@ -277,7 +273,7 @@ class QNetwork(nn.Module):
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     '''
     Defines a schedule for decaying epsilon during the training procedure
-    '''    
+    '''
     slope =  (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
 
@@ -285,21 +281,18 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
 q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
 target_network = {} # Dictionary for storing target networks (maps agent to a network)
-optimizer = {}  # Dictionary for mapping agent to optimizer 
+optimizer = {}  # Dictionary for mapping agent to optimizer
 neighbors = {agent: agents for agent in agents} # Dictionary that maps an agent to its "neighbors" TODO: should this be an experiment parameter?
 
-
-# Initialize each data structure for each agent 
+# Initialize each data structure for each agent
 for agent in agents:
     observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
+    # print(observation_space_shape)
     rb[agent] = ReplayBuffer(args.buffer_size)
     q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-    # if args.load_weights:
-    #     print(">>> ATTEMPTING TO LOAD WEIGHTS")
-    #     q_network[agent].load_state_dict( torch.load(f"ma2rl/1000000-{agent}.pt"))  # TODO: make sure this file exists
     target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-    target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
-    optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate) # All agents use the same optimizer for training
+    target_network[agent].load_state_dict(q_network[agent].state_dict())
+    optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate)
 
 loss_fn = nn.MSELoss()
 print(device.__repr__())
@@ -322,7 +315,6 @@ actions = {agent: None for agent in agents}
 losses = {agent: None for agent in agents}
 min_ind_rewards = 0
 max_ind_rewards = 0
-
 for global_step in range(args.total_timesteps):
 
     # ALGO LOGIC: put action logic here
@@ -337,7 +329,7 @@ for global_step in range(args.total_timesteps):
             actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
 
     # TRY NOT TO MODIFY: execute the game and log data.
-    next_obses, rewards, dones, _, _ = env.step(actions)
+    next_obses, rewards, dones, _, _  = env.step(actions)
 
     # Global states
     if args.global_obs:
@@ -351,7 +343,6 @@ for global_step in range(args.total_timesteps):
     min_ind_rewards += min(rewards.values())  # Accumulated min reward received by any agent this step
     max_ind_rewards += max(rewards.values())  # Accumulated max reward received by any agent this step
     
-    # Update the networks for each agent
     for agent in agents:
         # The reward for the SUMO environment has been set to return the total (negative) number of cars waiting at each intersection 
         # So we don't want to accumulate it twice
@@ -369,12 +360,12 @@ for global_step in range(args.total_timesteps):
                 for neighbor in neighbors[agent]:
                     # NOTE: each call to 'forward' returns a list of target values (one for each action) for that neighbor
                     # target_maxes stores the maximum of the target values for each neighbor
-                    # the reason this is called "empathetic" Q learning is we want to use the lowest of all these maximums to
+                    # the reason this is called "greedy" Q learning is we want to use the max of all these maximums to
                     # update the Q-network of this agent
                     target_maxes.append(torch.max(target_network[neighbor].forward(s_next_obses), dim=1)[0])
-                # "Empathetic" means we take the minimum here    
-                target = torch.min(torch.stack(target_maxes, dim=0), dim=0)[0]  
-                td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
+                # "Greedy" means we take the max here
+                target_max = torch.max(torch.stack(target_maxes, dim=0), dim=0)[0]
+                td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
             old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
             loss = loss_fn(td_target, old_val)
             losses[agent] = loss.item()
@@ -411,7 +402,7 @@ for global_step in range(args.total_timesteps):
     # If all agents are done, log the results and reset the evnironment to continue training
     if np.prod(list(dones.values())) or global_step % args.max_cycles == args.max_cycles-1:
         system_episode_reward = sum(list(episode_rewards.values()))
-
+        
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         print(f"global_step={global_step}, system_episode_reward={system_episode_reward}")
         diff_1 = max(episode_rewards.values())-min(episode_rewards.values())
@@ -425,20 +416,10 @@ for global_step in range(args.total_timesteps):
 
         # Logging should only be done after we've started training, up until then, the agents are just getting experience
         if global_step > args.learning_starts:
-            writer.add_scalar("charts/episode_reward/uir_1", uir_1, global_step)
-            writer.add_scalar("charts/episode_reward/lir_1", lir_1, global_step)
-            writer.add_scalar("charts/episode_reward/diff_1", diff_1, global_step)
-
-            writer.add_scalar("charts/episode_reward/uir_2", uir_2, global_step)
-            writer.add_scalar("charts/episode_reward/lir_2", lir_2, global_step)
-            writer.add_scalar("charts/episode_reward/diff_2", diff_2, global_step)
-            writer.add_scalar("charts/episode_reward/variance", variance, global_step)
-
-            writer.add_scalar("charts/epsilon/", epsilon, global_step)
-            writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
-
             for agent in agents:
                 writer.add_scalar("charts/episode_reward/" + agent, episode_rewards[agent], global_step)
+            writer.add_scalar("charts/epsilon/", epsilon, global_step)
+            writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
 
             with open(f"{csv_dir}/episode_reward.csv", "a", newline="") as csvfile:
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
@@ -449,8 +430,6 @@ for global_step in range(args.total_timesteps):
                 env.unwrapped.save_csv(sumo_csv, global_step)
 
         obses = env.reset()
-        lir_1 = 0
-        uir_1 = 0
 
         # Global states
         if args.global_obs:
