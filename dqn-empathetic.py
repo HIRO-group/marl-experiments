@@ -425,20 +425,10 @@ for global_step in range(args.total_timesteps):
 
         # Logging should only be done after we've started training, up until then, the agents are just getting experience
         if global_step > args.learning_starts:
-            writer.add_scalar("charts/episode_reward/uir_1", uir_1, global_step)
-            writer.add_scalar("charts/episode_reward/lir_1", lir_1, global_step)
-            writer.add_scalar("charts/episode_reward/diff_1", diff_1, global_step)
-
-            writer.add_scalar("charts/episode_reward/uir_2", uir_2, global_step)
-            writer.add_scalar("charts/episode_reward/lir_2", lir_2, global_step)
-            writer.add_scalar("charts/episode_reward/diff_2", diff_2, global_step)
-            writer.add_scalar("charts/episode_reward/variance", variance, global_step)
-
-            writer.add_scalar("charts/epsilon/", epsilon, global_step)
-            writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
-
             for agent in agents:
                 writer.add_scalar("charts/episode_reward/" + agent, episode_rewards[agent], global_step)
+            writer.add_scalar("charts/epsilon/", epsilon, global_step)
+            writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
 
             with open(f"{csv_dir}/episode_reward.csv", "a", newline="") as csvfile:
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
@@ -449,8 +439,6 @@ for global_step in range(args.total_timesteps):
                 env.unwrapped.save_csv(sumo_csv, global_step)
 
         obses = env.reset()
-        lir_1 = 0
-        uir_1 = 0
 
         # Global states
         if args.global_obs:
