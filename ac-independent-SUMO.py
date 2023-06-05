@@ -2,10 +2,13 @@
 ac-independent-SUMO.py
 
 Description:
-    Implementation of soft actor critic adapted for multi-agent environments. This implementation is origianlly based on
-    the Clean-RL version https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py
+    Implementation of actor critic adapted for multi-agent environments. This implementation is origianlly based on
+    the Clean-RL version https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py but uses Cross-Entropy for the actor's
+    loss computation. The critic utilizes the same Q-Network structure as as the other MARL methods in this repository and the
+    actor utilizes the same structure as the critic but with the addition of a layer that utilizes the softmax activation function
 
 Usage:
+    python ac-indepndent-SUMO.py -c experiments/sumo-2x2-ac-independent.config    
 
 
 References:
@@ -28,12 +31,10 @@ import numpy as np
 
 # # TODO: fix conda environment to include the version of gym that has Monitor module
 # from gym.wrappers import TimeLimit#, Monitor
-# from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
 from datetime import datetime
 import random
 import os
 import csv
-# import pettingzoo
 from pettingzoo.butterfly import pistonball_v6
 from pettingzoo.mpe import simple_spread_v3
 
@@ -193,18 +194,9 @@ if using_sumo:
                     sumo_warnings=False)
 
 else: 
-    # exec(f"from pettingzoo.mpe import {args.gym_id}") # lol
-    # exec(f"env = {args.gym_id}.parallel_env(N={args.N}, local_ratio=0.5, max_cycles={args.max_cycles}, continuous_actions=False)") # lol
     print(" > ENV ARGS: {}".format(args.env_args))
     exec(f"env = {args.gym_id}.parallel_env({args.env_args})")
 
-# from pettingzoo.mpe import simple_spread_v3
-# from pettingzoo.butterfly import pistonball_v6
-# print("ENV IMPORTED")
-
-# env = simple_spread_v3.parallel_env(N=args.N, local_ratio=0.5, max_cycles=args.max_cycles, continuous_actions=False, render_mode=None)
-# env = pistonball_v6.parallel_env(n_pistons=args.N, time_penalty=-0.1, continuous=False, max_cycles=args.max_cycles, render_mode=None)
-# print("ENV CREATED")
 
 print("\n=================== Environment Information ===================")
 agents = env.possible_agents
@@ -236,12 +228,11 @@ np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 env.reset(seed=args.seed)
-# env.action_space.seed(args.seed)
-# env.observation_space.seed(args.seed)
+
 for agent in agents:
     action_spaces[agent].seed(args.seed)
     observation_spaces[agent].seed(args.seed)
-    # assert isinstance(action_spaces[agent], Discrete), "only discrete action space is supported"
+
 # respect the default timelimit
 # assert isinstance(env.action_space, Discrete), "only discrete action space is supported"
 # TODO: Monitor was not working 
@@ -297,23 +288,25 @@ class Actor(nn.Module):
         hidden_size = 64
         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc_logits = nn.Linear(hidden_size, action_space_dim)
+        self.fc3 = nn.Linear(hidden_size, action_space_dim)
 
     def forward(self, x):
         # x = torcsh.Tensor(x).to(device)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         # print(">> SHAPE OF X: {}".format(x.shape))
-        logits = self.fc_logits(x)
+        logits = self.fc3(x)
         # print(">> SHAPE OF LOGITS: {}".format(logits.shape))
         return logits
     
     def get_action(self, x):
         x = torch.Tensor(x).to(device)
         logits = self.forward(x)
-        # Note that this is equivalent to what used to be called multinomial (i.e. what softmax produces)
+        # Note that this is equivalent to what used to be called multinomial 
+        # policy_dist.probs here will produce the same thing as softmax(logits)
         policy_dist = Categorical(logits=logits)
-        # print(" >>> Categorical: {}".format(policy_dist))
+        # policy_dist = F.softmax(logits)
+        # print(" >>> Categorical: {}".format(policy_dist.probs))
         # print(" >>> softmax: {}".format(F.softmax(logits)))
         action = policy_dist.sample()
         # Action probabilities for calculating the adapted loss
@@ -330,6 +323,32 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     '''
     slope =  (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
+
+
+def one_hot_q_values(q_values):
+    '''
+    Convert a tensor of q_values to one-hot encoded tensors
+    For example if Q(s,a) = [0.1, 0.5, 0.7] for a in A then
+    this function should return [0, 0, 1]
+    '''
+    # print(" >>>> q_values shape: {}".format(q_values.shape))
+    one_hot_values = np.zeros(q_values.shape)
+
+    for idx in range(len(q_values)):
+        
+
+        # print(" >>>> q_values[idx]: {}".format(q_values[idx]))
+
+        # Find index of max Q(s,a)
+        max_idx = torch.argmax(q_values[idx])
+
+        # Set the value corresponding to this index to 1
+        one_hot_values[idx, max_idx] = 1.0
+
+    # Convert np array to tensor before returning
+    return torch.from_numpy(one_hot_values)
+
+
 
 # Initialize data structures for training
 rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
@@ -369,11 +388,6 @@ obses, _ = env.reset()
 # print(" >> obses[0]: {}".format(obses[0]))
 # print(" >> obses[1]: {}".format(obses[1]))
 
-# obses = obses[0]    #TODO: For some reason obses is a tuple here for the pistonball env
-# for agent in agents:
-#     print(" >> SHAPES AFTER: {}".format(obses[agent].shape))
-
-
 # Global states
 if args.global_obs:
     print(" >> NOTE: USING GLOBAL OBSERVATIONS ")
@@ -395,9 +409,6 @@ uir_1 = 0
 var_1 = 0
 cnt = 0
 
-# TODO: this is the "entropy regularization coefficient", make this configurable or add the "autotune" from the CleanRL version
-entropy_reg_coef = 0.2 
-
 for global_step in range(args.total_timesteps):
 
     # ALGO LOGIC: put action logic here
@@ -408,8 +419,11 @@ for global_step in range(args.total_timesteps):
         if random.random() < epsilon:
             actions[agent] = action_spaces[agent].sample()
         else:
+            # Actor choses the actions
             action, _, _ = actor_network[agent].get_action(obses[agent])
             actions[agent] = action.detach().cpu().numpy()
+            
+            # Letting critic pick the actions
             # logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))  # Used in SUMO but not in simple_spread
             # actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
 
@@ -438,26 +452,30 @@ for global_step in range(args.total_timesteps):
 
     # Update the networks for each agent
     for agent in agents:
-        # The reward for the SUMO environment has been set to return the total (negative) number of cars waiting at each intersection 
-        # So we don't want to accumulate it twice
-        if using_sumo:
-            episode_rewards[agent] = rewards[agent]
-        else:
-            episode_rewards[agent] += rewards[agent]
-
+        
+        episode_rewards[agent] += rewards[agent]
+        
         # ALGO LOGIC: critic training
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
         if global_step > args.learning_starts and global_step % args.train_frequency == 0:
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
+            # print(" >>> s_obses: {}".format(s_obses))
             with torch.no_grad():
                 target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
                 td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
-            old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+            q_values = q_network[agent].forward(s_obses)
+
+            # Get the max Q(s,a) for each observation in the batch
+            old_val = q_values.gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+
+            # print(" >>> td_target: {}".format(td_target))
+            # print(" >>> q_values: {}".format(q_values))
+            # print(" >>> old_val: {}".format(old_val))
+            # print(" >>> q_values ONE HOT: {}".format(one_hot_q_values(q_values)))
+
+            # Compute loss for agent's critic
             loss = loss_fn(td_target, old_val)
             losses[agent] = loss.item()
-
-            if global_step % 100 == 0:
-                writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
 
             # optimize the model for the critic
             optimizer[agent].zero_grad()
@@ -468,20 +486,14 @@ for global_step in range(args.total_timesteps):
 
             # Actor training
             a, log_pi, action_probs = actor_network[agent].get_action(s_obses)
-            # TODO: how should these be calculated?
-            # Using critic network? Target network?
-            # S_obses or obses?
-            with torch.no_grad():
-                values = q_network[agent].forward(obses[agent])
-                # values = q_network[agent].forward(s_obses)
+            # print(" >>> action_probs: {}".format(action_probs))
 
-            actor_loss = (action_probs * ((entropy_reg_coef * log_pi) - values)).mean() # Modified from CleanRL SAC
-
-            # Actor uses cross-entropy loss function where
+            # Compute the loss for this agent's actor
+            # NOTE: Actor uses cross-entropy loss function where
             # input is the policy dist and the target is the value function with one-hot encoding applied
-            # actor_loss = actor_loss_fn(action_probs, F.one_hot(values))
-            # print(" >>> Values: {}".format(values))
-            # print(" >>> Values ONE HOT: {}".format(values))
+            # print(" >>> Values: {}".format(q_values))
+            actor_loss = actor_loss_fn(action_probs, one_hot_q_values(q_values))
+            # print(" >>> Values ONE HOT: {}".format(F.one_hot(values)))
             # print( " >> actor_loss = (action_probs * (entropy_reg_coef * log_pi) - values).mean() = {}".format((actor_loss)))
             actor_losses[agent] = actor_loss.item()
 
@@ -493,6 +505,11 @@ for global_step in range(args.total_timesteps):
             # update the target network
             if global_step % args.target_network_frequency == 0:
                 target_network[agent].load_state_dict(q_network[agent].state_dict())
+
+            # Save loss values occasionally
+            if global_step % 100 == 0:
+                writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
+                writer.add_scalar("losses/actor_loss/" + agent, actor_loss, global_step)
 
         # Save a snapshot of the actor and critic networks at this iteration of training
         if global_step % args.nn_save_freq == 0:

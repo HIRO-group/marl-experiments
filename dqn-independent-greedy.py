@@ -344,12 +344,8 @@ for global_step in range(args.total_timesteps):
     max_ind_rewards += max(rewards.values())  # Accumulated max reward received by any agent this step
     
     for agent in agents:
-        # The reward for the SUMO environment has been set to return the total (negative) number of cars waiting at each intersection 
-        # So we don't want to accumulate it twice
-        if using_sumo:
-            episode_rewards[agent] = rewards[agent]
-        else:
-            episode_rewards[agent] += rewards[agent]
+        
+        episode_rewards[agent] += rewards[agent]
 
         # ALGO LOGIC: training.
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))

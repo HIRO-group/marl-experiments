@@ -400,12 +400,8 @@ for global_step in range(args.total_timesteps):
     var_1 += np.var(list(rewards.values())) # Accumulated variance of rewards received by all agents this step
     cnt += 1
     for agent in agents:
-        # The reward for the SUMO environment has been set to return the total (negative) number of cars waiting at each intersection 
-        # So we don't want to accumulate it twice
-        if using_sumo:
-            episode_rewards[agent] = rewards[agent]
-        else:
-            episode_rewards[agent] += rewards[agent]
+        
+        episode_rewards[agent] += rewards[agent]
 
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
     
