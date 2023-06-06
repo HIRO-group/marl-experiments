@@ -291,7 +291,6 @@ class Actor(nn.Module):
         self.fc3 = nn.Linear(hidden_size, action_space_dim)
 
     def forward(self, x):
-        # x = torcsh.Tensor(x).to(device)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         # print(">> SHAPE OF X: {}".format(x.shape))
