@@ -1,12 +1,10 @@
 """
-sumo_analysis.py
+sumo_generate_learning_curve.py
 
 Description:
-    Script for analyzing the progress of MARL algorithms on the SUMO environment. This script is intended to load a NN model
-    from a specified training checkpoint and display its performance in the SUMO GUI.
+
 
 Usage:
-    python sumo_analysis.py -c experiments/sumo-4x4-dqn-independent.config
 
 """
 
@@ -17,7 +15,7 @@ import torch.nn.functional as F
 import configargparse
 from distutils.util import strtobool
 import numpy as np
-import datetime
+from datetime import datetime
 
 import random
 import os
@@ -61,10 +59,11 @@ class QNetwork(nn.Module):
 
 
 if __name__ == "__main__":
-    parser = configargparse.ArgParser(default_config_files=['experiments/sumo-4x4-independent.config'], description='DQN agent')
+    parser = configargparse.ArgParser(default_config_files=['experiments/sumo-4x4-independent.config'], 
+                                      description="Generate the learning curve for agents trained on the SUMO environment")
     parser.add_argument('-c', '--config_path', required=False, is_config_file=True, help='config file path')
 
-    # TODO: remove unecessary configs here, we're just looking at sumo in this file
+     # TODO: remove unecessary configs here, we're just looking at sumo in this file
     # Common arguments
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
                         help='the name of this experiment')
@@ -146,20 +145,23 @@ if __name__ == "__main__":
     parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", action="store_true", default=False, required=False, 
                         help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
                         
+                        
     args = parser.parse_args()
     
+    # Create CSV file to store the data
+    nn_directory = args.nn_directory        
+    nn_dir = f"nn/{nn_directory}"           # Name of directory where the nn was stored during training    
+    analysis_time = str(datetime.now()).split('.')[0].replace(':','-')
+    csv_dir = f"analysis/{nn_directory+analysis_time}"
+    os.makedirs(csv_dir)
+
     if not args.seed:
         args.seed = int(datetime.now()) 
     
     device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
 
-
-    analysis_steps = args.analysis_steps    # Defines which checkpoint will be loaded into the Q model
     parameter_sharing_model = args.parameter_sharing_model  # Flag indicating if we're loading a model from DQN with PS
-    nn_directory = args.nn_directory 
-    nn_dir = f"nn/{nn_directory}" # Name of directory where the nn was stored during training    
-
-    print(">> PS? {}".format(parameter_sharing_model))
+    print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
 
     # Create the env
     # Sumo must be created using the sumo-rl module
@@ -167,7 +169,7 @@ if __name__ == "__main__":
     # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
     env = sumo_rl.parallel_env(net_file=args.net, 
                     route_file=args.route,
-                    use_gui=True,
+                    use_gui=False,
                     max_green=args.max_green,
                     min_green=args.min_green,
                     num_seconds=args.sumo_seconds,
@@ -179,49 +181,13 @@ if __name__ == "__main__":
     # TODO: these dictionaries are deprecated, use action_space & observation_space functions instead
     action_spaces = env.action_spaces
     observation_spaces = env.observation_spaces
-    onehot_keys = {agent: i for i, agent in enumerate(agents)}
-    
-    episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
+
 
     print("\n=================== Environment Information ===================")
-    print(" > agents:\n {}".format(agents))
-    print(" > num_agents:\n {}".format(num_agents))
-    print(" > action_spaces:\n {}".format(action_spaces))
-    print(" > observation_spaces:\n {}".format(observation_spaces))
-
-    # Construct the Q-Network model 
-    # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
-    # DQN model was used
-
-    if parameter_sharing_model:
-        # Define the shape of the observation space depending on if we're using a global observation or not
-        # Regardless, we need to add an array of length num_agents to the observation to account for one hot encoding
-        eg_agent = agents[0]
-        if args.global_obs:
-            observation_space_shape = tuple((shape+1) * (num_agents) for shape in observation_spaces[eg_agent].shape)
-        else:
-            observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
-            observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
- 
-        q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
-        
-        # Load the Q-network file
-        nn_file = "{}/{}.pt".format(nn_dir, analysis_steps)
-        q_network.load_state_dict(torch.load(nn_file))
-
-    # Else the agents were trained using normal independent DQN so each agent gets its own Q-network model
-    else: 
-        
-        q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
-        
-        # Load the Q-Network NN model for each agent from the specified anaylisis checkpoint step from training
-        for agent in agents: 
-            observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
-            q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n)
-
-            nn_file = "{}/{}-{}.pt".format(nn_dir, analysis_steps, agent)   # TODO: make the step number configurable
-            q_network[agent].load_state_dict(torch.load(nn_file))
-    
+    print(" > agents: {}".format(agents))
+    print(" > num_agents: {}".format(num_agents))
+    print(" > action_spaces: {}".format(action_spaces))
+    print(" > observation_spaces: {}".format(observation_spaces))
 
     # Seed the env
     env.reset(seed=args.seed)
@@ -229,73 +195,128 @@ if __name__ == "__main__":
         action_spaces[agent].seed(args.seed)
         observation_spaces[agent].seed(args.seed)
 
-    # Initialize the env
-    obses, _ = env.reset()
+    # Initialize the CSV header
+    with open(f"{csv_dir}/learning_curve.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
+        csv_writer.writeheader()
 
-    # Initialize observations depending on if parameter sharing was used or not
-    if parameter_sharing_model:
-        if args.global_obs:
-            global_obs = np.hstack(list(obses.values()))
-            for agent in agents:
-                onehot = np.zeros(num_agents)
-                onehot[onehot_keys[agent]] = 1.0
-                obses[agent] = np.hstack([onehot, global_obs])
-        else:
-            for agent in agents:
-                onehot = np.zeros(num_agents)
-                onehot[onehot_keys[agent]] = 1.0
-                obses[agent] = np.hstack([onehot, obses[agent]])
-    
-    # Parameter sharing model not used but we still need to check if global observations were used
-    else:
-        if args.global_obs:
-            global_obs = np.hstack(list(obses.values()))
-            obses = {agent: global_obs for agent in agents}
+    # Loop over all the nn files in the nn directory
+    # Every nn_save_freq steps, a new nn.pt file was saved during training
+    for saved_step in range(0, args.total_timesteps, args.nn_save_freq):
+        print(" > Loading network at learning step: {}".format(saved_step))
 
-    # Define empty dictionary tha maps agents to actions
-    actions = {agent: None for agent in agents}
+        onehot_keys = {agent: i for i, agent in enumerate(agents)}
+        episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
 
-    # Simulate the environment using actions derived from the Q-Network
-    for sumo_step in range(args.sumo_seconds):
-        # Populate the action dictionary
-        for agent in agents:
-            if parameter_sharing_model:
-                logits = q_network.forward(obses[agent].reshape((1,)+obses[agent].shape))
-            else:
-                logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
-
-            actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
-
-        # Apply all actions to the env
-        next_obses, rewards, dones, _, _ = env.step(actions)
-
-        # If the parameter sharing model was used, we have to add one hot encoding to the observations
+        # Construct the Q-Network model 
+        # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
+        # DQN model was used
         if parameter_sharing_model:
-            # Add one hot encoding for either global observations or independent observations
+            # Define the shape of the observation space depending on if we're using a global observation or not
+            # Regardless, we need to add an array of length num_agents to the observation to account for one hot encoding
+            eg_agent = agents[0]
             if args.global_obs:
-                global_next_obs = np.hstack(list(next_obses.values()))
+                observation_space_shape = tuple((shape+1) * (num_agents) for shape in observation_spaces[eg_agent].shape)
+            else:
+                observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
+                observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
+    
+            q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+            
+            # Load the Q-network file
+            nn_file = "{}/{}.pt".format(nn_dir, saved_step)
+            q_network.load_state_dict(torch.load(nn_file))
+
+        # Else the agents were trained using normal independent DQN so each agent gets its own Q-network model
+        else: 
+            
+            q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
+            
+            # Load the Q-Network NN model for each agent from the specified anaylisis checkpoint step from training
+            for agent in agents: 
+                observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
+                q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n)
+
+                nn_file = "{}/{}-{}.pt".format(nn_dir, saved_step, agent)   # TODO: make the step number configurable
+                q_network[agent].load_state_dict(torch.load(nn_file))
+
+        # Initialize the env
+        print(" > Resetting environment")
+        obses, _ = env.reset()
+
+        # Initialize observations depending on if parameter sharing was used or not
+        if parameter_sharing_model:
+            if args.global_obs:
+                global_obs = np.hstack(list(obses.values()))
                 for agent in agents:
                     onehot = np.zeros(num_agents)
                     onehot[onehot_keys[agent]] = 1.0
-                    next_obses[agent] = np.hstack([onehot, global_next_obs])
+                    obses[agent] = np.hstack([onehot, global_obs])
             else:
                 for agent in agents:
                     onehot = np.zeros(num_agents)
                     onehot[onehot_keys[agent]] = 1.0
-                    next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+                    obses[agent] = np.hstack([onehot, obses[agent]])
         
-        # Accumulate the total episode reward
-        for agent in agents:
-            episode_rewards[agent] += rewards[agent]
+        # Parameter sharing model not used but we still need to check if global observations were used
+        else:
+            if args.global_obs:
+                global_obs = np.hstack(list(obses.values()))
+                obses = {agent: global_obs for agent in agents}
 
-        obses = next_obses
+        # Define empty dictionary tha maps agents to actions
+        actions = {agent: None for agent in agents}
 
-        # If the simulation is done, print the episode reward and close the env
-        if np.prod(list(dones.values())):
-            system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
+        # Simulate the environment using actions derived from the Q-Network
+        print(" > Executing policy from network")
+        for sumo_step in range(args.sumo_seconds):
+            # Populate the action dictionary
+            for agent in agents:
+                if parameter_sharing_model:
+                    logits = q_network.forward(obses[agent].reshape((1,)+obses[agent].shape))
+                else:
+                    logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
 
-            print(" >> TOTAL EPISODE REWARD: {}".format(system_episode_reward))
+                actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
 
-            break
+            # Apply all actions to the env
+            next_obses, rewards, dones, _, _ = env.step(actions)
+
+            # If the parameter sharing model was used, we have to add one hot encoding to the observations
+            if parameter_sharing_model:
+                # Add one hot encoding for either global observations or independent observations
+                if args.global_obs:
+                    global_next_obs = np.hstack(list(next_obses.values()))
+                    for agent in agents:
+                        onehot = np.zeros(num_agents)
+                        onehot[onehot_keys[agent]] = 1.0
+                        next_obses[agent] = np.hstack([onehot, global_next_obs])
+                else:
+                    for agent in agents:
+                        onehot = np.zeros(num_agents)
+                        onehot[onehot_keys[agent]] = 1.0
+                        next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+    
+            # Accumulate the total episode reward
+            for agent in agents:
+                episode_rewards[agent] += rewards[agent]
+                # print(" >>> episode_rewards: {}".format(episode_rewards))
+                # print(" >>> rewards[{}]: {}".format(agent, rewards[agent]))
+
+
+            obses = next_obses
+
+            # If the simulation is done, print the episode reward and close the env
+            if np.prod(list(dones.values())):
+                system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
+
+                # Log the episode reward to CSV
+                with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'nn_step'])
+                    csv_writer.writerow({**episode_rewards, **{'system_episode_reward': system_episode_reward, 'nn_step': saved_step}})
+                
+                print(" >> TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
+
+                break
     
     env.close()
