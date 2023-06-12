@@ -2,10 +2,14 @@
 sumo_generate_learning_curve.py
 
 Description:
-
+    File for generating the learning curve for a multi-agent model trained on the SUMO environment.
+    This script evaluates the neural networks that were periodically saved during the training process
+    by executing each checkpoint on the SUMO environment. The SUMO environment is configured the same way
+    here as it is in the training process but here agents are not allowed to take epsilon-random actions 
+    (actions are chosen soley from the model's policy). 
 
 Usage:
-
+    python sumo_generate_learning_curve.py -c experiments/sumo-2x2-ac-independent.config    
 """
 
 import torch
@@ -16,6 +20,7 @@ import configargparse
 from distutils.util import strtobool
 import numpy as np
 from datetime import datetime
+from torch.distributions.categorical import Categorical
 
 import random
 import os
@@ -35,27 +40,62 @@ else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
 
-# TODO: this should probably just go in its own file so it's consistent across all training
-# TODO: May need to update this for actor critic, actor and critic should have the same "forward" structure
-class QNetwork(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim, parameter_sharing_model=False):
-        super(QNetwork, self).__init__()
-        self.parameter_sharing_model = parameter_sharing_model
-        # Size of model depends on if parameter sharing was used or not
-        if self.parameter_sharing_model:
-            hidden_size = num_agents * 64
-        else:
-            hidden_size = 64    # TODO: should we make this a config parameter?
+# # TODO: this should probably just go in its own file so it's consistent across all training
+# # TODO: May need to update this for actor critic, actor and critic should have the same "forward" structure
+# class QNetwork(nn.Module):
+#     def __init__(self, observation_space_shape, action_space_dim, parameter_sharing_model=False):
+#         super(QNetwork, self).__init__()
+#         self.parameter_sharing_model = parameter_sharing_model
+#         # Size of model depends on if parameter sharing was used or not
+#         if self.parameter_sharing_model:
+#             hidden_size = num_agents * 64
+#         else:
+#             hidden_size = 64    # TODO: should we make this a config parameter?
+#         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
+#         self.fc2 = nn.Linear(hidden_size, hidden_size)
+#         self.fc3 = nn.Linear(hidden_size, action_space_dim)
+
+#     def forward(self, x):
+#         x = torch.Tensor(x).to(device)
+#         x = F.relu(self.fc1(x))
+#         x = F.relu(self.fc2(x))
+#         x = self.fc3(x)
+#         return x
+
+# TODO: add config flag to indicate if the Actor model or the critic model should be used
+# Define the Actor class
+# Based on implementation from here: https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py
+class Actor(nn.Module):
+    def __init__(self, observation_space_shape, action_space_dim):
+        super(Actor, self).__init__()
+        hidden_size = 64
         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, action_space_dim)
 
     def forward(self, x):
-        x = torch.Tensor(x).to(device)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        # print(">> SHAPE OF X: {}".format(x.shape))
+        logits = self.fc3(x)
+        # print(">> SHAPE OF LOGITS: {}".format(logits.shape))
+        return logits
+    
+    def get_action(self, x):
+        x = torch.Tensor(x).to(device)
+        logits = self.forward(x)
+        # Note that this is equivalent to what used to be called multinomial 
+        # policy_dist.probs here will produce the same thing as softmax(logits)
+        policy_dist = Categorical(logits=logits)
+        # policy_dist = F.softmax(logits)
+        # print(" >>> Categorical: {}".format(policy_dist.probs))
+        # print(" >>> softmax: {}".format(F.softmax(logits)))
+        action = policy_dist.sample()
+        # Action probabilities for calculating the adapted loss
+        action_probs = policy_dist.probs
+        log_prob = F.log_softmax(logits, dim=-1)
+        # return action, torch.transpose(log_prob, 0, 1), action_probs
+        return action, log_prob, action_probs
 
 
 if __name__ == "__main__":
@@ -145,7 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", action="store_true", default=False, required=False, 
                         help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
                         
-                        
+
     args = parser.parse_args()
     
     # Create CSV file to store the data
@@ -221,8 +261,9 @@ if __name__ == "__main__":
                 observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
                 observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
     
-            q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
-            
+            # q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+            q_network = Actor(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+
             # Load the Q-network file
             nn_file = "{}/{}.pt".format(nn_dir, saved_step)
             q_network.load_state_dict(torch.load(nn_file))
@@ -235,7 +276,8 @@ if __name__ == "__main__":
             # Load the Q-Network NN model for each agent from the specified anaylisis checkpoint step from training
             for agent in agents: 
                 observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
-                q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n)
+                # q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n)
+                q_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
 
                 nn_file = "{}/{}-{}.pt".format(nn_dir, saved_step, agent)   # TODO: make the step number configurable
                 q_network[agent].load_state_dict(torch.load(nn_file))
@@ -272,12 +314,18 @@ if __name__ == "__main__":
         for sumo_step in range(args.sumo_seconds):
             # Populate the action dictionary
             for agent in agents:
-                if parameter_sharing_model:
-                    logits = q_network.forward(obses[agent].reshape((1,)+obses[agent].shape))
-                else:
-                    logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
+                # TODO: uncomment once the critic/actor flag is added
+                # # # if parameter_sharing_model:
+                # # #     logits = q_network.forward(obses[agent].reshape((1,)+obses[agent].shape))
+                # # # else:
+                # # #     logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
 
-                actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
+                # # # actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
+
+                ## Testing actor version
+                action, _, _ = q_network[agent].get_action(obses[agent])
+                actions[agent] = action.detach().cpu().numpy()
+
 
             # Apply all actions to the env
             next_obses, rewards, dones, _, _ = env.step(actions)
