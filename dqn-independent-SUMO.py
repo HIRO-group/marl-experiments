@@ -30,15 +30,16 @@ import configargparse
 from distutils.util import strtobool
 import collections
 import numpy as np
-import gym
+# import gym
 # TODO: fix conda environment to include the version of gym that has Monitor module
-from gym.wrappers import TimeLimit#, Monitor
-from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
+# from gym.wrappers import TimeLimit#, Monitor
+# from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
 from datetime import datetime
 import random
 import os
 import csv
-import pettingzoo
+from pettingzoo.butterfly import pistonball_v6
+from pettingzoo.mpe import simple_spread_v3
 
 # SUMO dependencies
 import sumo_rl
@@ -146,7 +147,7 @@ if __name__ == "__main__":
             sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
     if not args.seed:
-        args.seed = int(time.time())
+        args.seed = int(datetime.now())
 
 def one_hot(a, size):
     b = np.zeros((size))
@@ -193,8 +194,8 @@ if using_sumo:
                     sumo_warnings=False)
 
 else: 
-    exec(f"import pettingzoo.{args.gym_id}") # lol
-    exec(f"env = pettingzoo.{args.gym_id}.parallel_env(N={args.N}, local_ratio=0.5, max_cycles={args.max_cycles}, continuous_actions=False)") # lol
+    print(" > ENV ARGS: {}".format(args.env_args))
+    exec(f"env = {args.gym_id}.parallel_env({args.env_args})")
 
 agents = env.possible_agents
 num_agents = len(env.possible_agents)
@@ -349,12 +350,8 @@ for global_step in range(args.total_timesteps):
 
     # Update the networks for each agent
     for agent in agents:
-        # The reward for the SUMO environment has been set to return the total (negative) number of cars waiting at each intersection 
-        # So we don't want to accumulate it twice
-        if using_sumo:
-            episode_rewards[agent] = rewards[agent]
-        else:
-            episode_rewards[agent] += rewards[agent]
+
+        episode_rewards[agent] += rewards[agent]
 
         # ALGO LOGIC: training.
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))

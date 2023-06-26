@@ -1,49 +1,47 @@
 """
-dqn-empathetic.py
+ac-independent-SUMO.py
 
 Description:
-    Implementation of distributed "empathetic" Q-Learning to be used on various environments from the PettingZoo 
-    library. This file was modified to support use of the sumo-rl traffic simulator library
-    https://github.com/LucasAlegre/sumo-rl which is not technically part of the PettingZoo module but 
-    conforms to the Petting Zoo API. Configuration of this script is performed through a configuration file, 
-    examples of which can be found in the experiments/ directory.
-
-    Note that experiments using the SUMO traffic simulator also require 'net' and 'route' files to configure 
-    the environment.
+    Implementation of actor critic adapted for multi-agent environments. This implementation is origianlly based on
+    the Clean-RL version https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py but uses Cross-Entropy for the actor's
+    loss computation. The critic utilizes the same Q-Network structure as as the other MARL methods in this repository and the
+    actor utilizes the same structure as the critic but with the addition of a layer that utilizes the softmax activation function
 
 Usage:
-    python dqn-empathetic.py -c experiments/sumo-4x4-dqn-empathetic.config    
+    python ac-indepndent-SUMO.py -c experiments/sumo-2x2-ac-independent.config    
+
 
 References:
-    - https://github.com/LucasAlegre/sumo-rl 
-    - https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf 
-"""
+    - https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py 
 
+"""
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torch.distributions.categorical import Categorical
+
 
 import configargparse
 from distutils.util import strtobool
 import collections
 import numpy as np
-import gym
-# TODO: fix conda environment to include the version of gym that has Monitor module
-from gym.wrappers import TimeLimit#, Monitor
-from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
+
+# # TODO: fix conda environment to include the version of gym that has Monitor module
+# from gym.wrappers import TimeLimit#, Monitor
 from datetime import datetime
 import random
 import os
 import csv
-import pettingzoo
+from pettingzoo.butterfly import pistonball_v6
+from pettingzoo.mpe import simple_spread_v3
 
 # SUMO dependencies
 import sumo_rl
 import sys
-
+from sumo_custom_observation import CustomObservationFunction
 
 
 if __name__ == "__main__":
@@ -146,12 +144,7 @@ if __name__ == "__main__":
             sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
     if not args.seed:
-        args.seed = int(time.time())
-
-def one_hot(a, size):
-    b = np.zeros((size))
-    b[a] = 1
-    return b
+        args.seed = int(datetime.now())
 
 # TRY NOT TO MODIFY: setup the environment
 if args.gpu_id is not None:
@@ -166,11 +159,12 @@ if args.prod_mode:
     wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
     writer = SummaryWriter(f"/tmp/{experiment_name}")
 
+# Specify directories for logging 
 nn_dir = f"nn/{experiment_name}"
 csv_dir = f"csv/{experiment_name}"
-os.makedirs(nn_dir)
+os.makedirs(f"{nn_dir}/critic_networks")
+os.makedirs(f"{nn_dir}/actor_networks")
 os.makedirs(csv_dir)
-
 
 # TRY NOT TO MODIFY: seeding
 device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
@@ -178,7 +172,7 @@ device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cp
 # Define an additional output file for the sumo-specific data
 if using_sumo:
     sumo_csv = "{}/_SUMO_alpha{}_gamma{}_{}".format(csv_dir, args.learning_rate, args.gamma, experiment_time)
-    
+
 # Instantiate the environment 
 if using_sumo:
     # Sumo must be created using the sumo-rl module
@@ -190,31 +184,50 @@ if using_sumo:
                     max_green=args.max_green,
                     min_green=args.min_green,
                     num_seconds=args.sumo_seconds,
-                    reward_fn=args.sumo_reward, 
+                    reward_fn=args.sumo_reward,
+                    observation_class=CustomObservationFunction,
                     sumo_warnings=False)
 
 else: 
-    exec(f"import pettingzoo.{args.gym_id}") # lol
-    exec(f"env = pettingzoo.{args.gym_id}.parallel_env(N={args.N}, local_ratio=0.5, max_cycles={args.max_cycles}, continuous_actions=False)") # lol
+    print(" > ENV ARGS: {}".format(args.env_args))
+    exec(f"env = {args.gym_id}.parallel_env({args.env_args})")
 
-agents = env.possible_agents
-num_agents = len(env.possible_agents)
-# TODO: these dictionaries are deprecated, use action_space & observation_space functions instead
-action_spaces = env.action_spaces
-observation_spaces = env.observation_spaces
 
 print("\n=================== Environment Information ===================")
-print(" > agents: {}".format(agents))
-print(" > num_agents: {}".format(num_agents))
-print(" > action_spaces: {}".format(action_spaces))
-print(" > observation_spaces: {}".format(observation_spaces))
+agents = env.possible_agents
+print(" > agents:\n {}".format(agents))
 
+num_agents = len(env.possible_agents)
+print(" > num_agents:\n {}".format(num_agents))
 
-with open(f"{csv_dir}/td_loss.csv", "w", newline="") as csvfile:
+# TODO: these dictionaries are deprecated, use action_space & observation_space functions instead
+action_spaces = env.action_spaces
+print(" > action_spaces:\n {}".format(action_spaces))
+
+observation_spaces = env.observation_spaces
+print(" > observation_spaces:\n {}".format(observation_spaces))
+
+# CSV files to save episode metrics during training
+with open(f"{csv_dir}/critic_loss.csv", "w", newline="") as csvfile:
     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
     csv_writer.writeheader()
+
+with open(f"{csv_dir}/actor_loss.csv", "w", newline="") as csvfile:
+    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_actor_loss', 'global_step'])
+    csv_writer.writeheader()    
+
+# system_episode_reward: the cumulative reward of all agents during the episode
+# global_step: the global step in training
 with open(f"{csv_dir}/episode_reward.csv", "w", newline="") as csvfile:
     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
+    csv_writer.writeheader()
+
+# system_episode_max_speed: Maximum speed observed by all agents during an episode
+# system_episode_min_max_speed: The lowest of all maximum speeds observed by all agents during an episode
+#   i.e. if four agents observed max speeds of [6.6, 7.0, 10.0, 12.0] during the episode, 
+#   system_episode_min_max_speed would return 6.6 and system_episode_max_speed would return 12.0
+with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
+    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'global_step'])    
     csv_writer.writeheader()
 
 random.seed(args.seed)
@@ -222,12 +235,11 @@ np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 env.reset(seed=args.seed)
-# env.action_space.seed(args.seed)
-# env.observation_space.seed(args.seed)
+
 for agent in agents:
     action_spaces[agent].seed(args.seed)
     observation_spaces[agent].seed(args.seed)
-    # assert isinstance(action_spaces[agent], Discrete), "only discrete action space is supported"
+
 # respect the default timelimit
 # assert isinstance(env.action_space, Discrete), "only discrete action space is supported"
 # TODO: Monitor was not working 
@@ -259,10 +271,11 @@ class ReplayBuffer():
                np.array(done_mask_lst)
 
 # ALGO LOGIC: initialize agent here:
+# This is the Critic
 class QNetwork(nn.Module):
     def __init__(self, observation_space_shape, action_space_dim):
         super(QNetwork, self).__init__()
-        hidden_size =  64
+        hidden_size = 64    # TODO: should we make this a config parameter?
         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, action_space_dim)
@@ -274,54 +287,121 @@ class QNetwork(nn.Module):
         x = self.fc3(x)
         return x
 
+# Define the Actor class
+# Based on implementation from here: https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py
+class Actor(nn.Module):
+    def __init__(self, observation_space_shape, action_space_dim):
+        super(Actor, self).__init__()
+        hidden_size = 64
+        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, action_space_dim)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        logits = self.fc3(x)
+        return logits
+    
+    def get_action(self, x):
+        x = torch.Tensor(x).to(device)
+        logits = self.forward(x)
+        # Note that this is equivalent to what used to be called multinomial 
+        # policy_dist.probs here will produce the same thing as softmax(logits)
+        policy_dist = Categorical(logits=logits)
+        action = policy_dist.sample()
+
+        # Action probabilities for calculating the adapted loss
+        action_probs = policy_dist.probs
+        log_prob = F.log_softmax(logits, dim=-1)
+
+        return action, log_prob, action_probs
+
+
+
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     '''
     Defines a schedule for decaying epsilon during the training procedure
-    '''    
+    '''
     slope =  (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
 
+
+def one_hot_q_values(q_values):
+    '''
+    Convert a tensor of q_values to one-hot encoded tensors
+    For example if Q(s,a) = [0.1, 0.5, 0.7] for a in A then
+    this function should return [0, 0, 1]
+    '''
+    # print(" >>>> q_values shape: {}".format(q_values.shape))
+    one_hot_values = np.zeros(q_values.shape)
+
+    for idx in range(len(q_values)):
+
+        # Find index of max Q(s,a)
+        max_idx = torch.argmax(q_values[idx])
+
+        # Set the value corresponding to this index to 1
+        one_hot_values[idx, max_idx] = 1.0
+
+    # Convert np array to tensor before returning
+    return torch.from_numpy(one_hot_values)
+
+
 # Initialize data structures for training
 rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
-q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
+q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network), these are the "critics"
 target_network = {} # Dictionary for storing target networks (maps agent to a network)
-optimizer = {}  # Dictionary for mapping agent to optimizer 
-neighbors = {agent: agents for agent in agents} # Dictionary that maps an agent to its "neighbors" TODO: should this be an experiment parameter?
+actor_network = {} # Dictionary for storing actor networks (maps agents to a network)
+optimizer = {}  # Dictionary for storing optimizer for each agent's network
+actor_optimizer = {} # Dictionary for storing the optimizers used to train the actor networks 
 
-
-# Initialize each data structure for each agent 
+print(" > INITIALIZING NEURAL NETWORKS")
 for agent in agents:
     observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
     rb[agent] = ReplayBuffer(args.buffer_size)
     q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-    # if args.load_weights:
-    #     print(">>> ATTEMPTING TO LOAD WEIGHTS")
-    #     q_network[agent].load_state_dict( torch.load(f"ma2rl/1000000-{agent}.pt"))  # TODO: make sure this file exists
     target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-    target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
+    target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the critic network
+    actor_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
     optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate) # All agents use the same optimizer for training
+    actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=args.learning_rate)
 
-loss_fn = nn.MSELoss()
-print(device.__repr__())
-print(q_network[agent]) # network of last agent
+    print(" >> AGENT: {}".format(agent))    
+    print(" >> OBSERVATION_SPACE_SHAPE: {}".format(observation_space_shape))
+    print(" >> ACTION_SPACE_SHAPE: {}".format(action_spaces[agent].n))
+
+loss_fn = nn.MSELoss() # TODO: should the loss function be configurable?
+actor_loss_fn = nn.CrossEntropyLoss()
+
+print(" > Device: ",device.__repr__())
+print(" > Q_network structure: ", q_network[agent]) # network of last agent
 
 # TRY NOT TO MODIFY: start the game
-obses = env.reset()
+obses, _ = env.reset()
+
 
 # Global states
 if args.global_obs:
+    print(" > GLOBAL OBSERVATIONS ENABLED")
     global_obs = np.hstack(list(obses.values()))
     obses = {agent: global_obs for agent in agents}
 
-# print(obses)
-if args.render:
-    env.render()
+else: 
+    print(" > GLOBAL OBSERVATIONS DISABLED")
 
-episode_rewards = {agent: 0 for agent in agents}
-actions = {agent: None for agent in agents}
-losses = {agent: None for agent in agents}
-min_ind_rewards = 0
-max_ind_rewards = 0
+if args.render:
+    env.render()    # TODO: verify that the sumo env supports render
+
+episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
+episode_max_speeds = {agent: [0] for agent in agents}   # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
+actions = {agent: None for agent in agents}             # Dictionary that maps each agent to the action it selected
+losses = {agent: None for agent in agents}              # Dictionary that maps each agent to the loss values for its critic network
+actor_losses = {agent: None for agent in agents}        # Dictionary that maps each agent to the loss values for its actor network
+lir_1 = 0
+uir_1 = 0
+var_1 = 0
+cnt = 0
 
 for global_step in range(args.total_timesteps):
 
@@ -333,8 +413,13 @@ for global_step in range(args.total_timesteps):
         if random.random() < epsilon:
             actions[agent] = action_spaces[agent].sample()
         else:
-            logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
-            actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
+            # Actor choses the actions
+            action, _, _ = actor_network[agent].get_action(obses[agent])
+            actions[agent] = action.detach().cpu().numpy()
+            
+            # Letting critic pick the actions
+            # logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))  # Used in SUMO but not in simple_spread
+            # actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
 
     # TRY NOT TO MODIFY: execute the game and log data.
     next_obses, rewards, dones, _, _ = env.step(actions)
@@ -348,85 +433,137 @@ for global_step in range(args.total_timesteps):
         env.render()
 
     # Extract performance about how we're doing so far
-    min_ind_rewards += min(rewards.values())  # Accumulated min reward received by any agent this step
-    max_ind_rewards += max(rewards.values())  # Accumulated max reward received by any agent this step
-    
+    lir_1 += min(rewards.values())          # Accumulated min reward received by any agent this step
+    uir_1 += max(rewards.values())          # Accumulated max reward received by any agent this step
+    var_1 += np.var(list(rewards.values())) # Accumulated variance of rewards received by all agents this step
+    cnt += 1
+
     # Update the networks for each agent
     for agent in agents:
-        # The reward for the SUMO environment has been set to return the total (negative) number of cars waiting at each intersection 
-        # So we don't want to accumulate it twice
-        if using_sumo:
-            episode_rewards[agent] = rewards[agent]
-        else:
-            episode_rewards[agent] += rewards[agent]
-
-        # ALGO LOGIC: training.
+        
+        episode_rewards[agent] += rewards[agent]
+        # TODO: need to modify this for global observations
+        episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
+        
+        # ALGO LOGIC: critic training
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
         if global_step > args.learning_starts and global_step % args.train_frequency == 0:
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
+            # print(" >>> s_obses: {}".format(s_obses))
             with torch.no_grad():
-                target_maxes = []
-                for neighbor in neighbors[agent]:
-                    # NOTE: each call to 'forward' returns a list of target values (one for each action) for that neighbor
-                    # target_maxes stores the maximum of the target values for each neighbor
-                    # the reason this is called "empathetic" Q learning is we want to use the lowest of all these maximums to
-                    # update the Q-network of this agent
-                    target_maxes.append(torch.max(target_network[neighbor].forward(s_next_obses), dim=1)[0])
-                # "Empathetic" means we take the minimum here    
-                target = torch.min(torch.stack(target_maxes, dim=0), dim=0)[0]  
-                td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
-            old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+                target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
+                td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+            q_values = q_network[agent].forward(s_obses)
+
+            # Get the max Q(s,a) for each observation in the batch
+            old_val = q_values.gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+
+            # Compute loss for agent's critic
             loss = loss_fn(td_target, old_val)
             losses[agent] = loss.item()
 
-            if global_step % 100 == 0:
-                writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
-
-            # optimize the model
+            # optimize the model for the critic
             optimizer[agent].zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), args.max_grad_norm)
             optimizer[agent].step()
 
+
+            # Actor training
+            a, log_pi, action_probs = actor_network[agent].get_action(s_obses)
+
+            # Compute the loss for this agent's actor
+            # NOTE: Actor uses cross-entropy loss function where
+            # input is the policy dist and the target is the value function with one-hot encoding applied
+            q_values_one_hot = one_hot_q_values(q_values)
+            actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
+            actor_losses[agent] = actor_loss.item()
+
+            actor_optimizer[agent].zero_grad()
+            actor_loss.backward()
+            nn.utils.clip_grad_norm_(list(actor_network[agent].parameters()), args.max_grad_norm)
+            actor_optimizer[agent].step()
+
             # update the target network
             if global_step % args.target_network_frequency == 0:
                 target_network[agent].load_state_dict(q_network[agent].state_dict())
 
+            # Save loss values occasionally
+            if global_step % 100 == 0:
+                writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
+                writer.add_scalar("losses/actor_loss/" + agent, actor_loss, global_step)
+
+        # Save a snapshot of the actor and critic networks at this iteration of training
         if global_step % args.nn_save_freq == 0:
             for a in agents:
-                torch.save(q_network[a].state_dict(), f"{nn_dir}/{global_step}-{a}.pt")
+                torch.save(q_network[a].state_dict(), f"{nn_dir}/critic_networks/{global_step}-{a}.pt")
+                torch.save(actor_network[a].state_dict(), f"{nn_dir}/actor_networks/{global_step}-{a}.pt")
 
-        # TRY NOT TO MODIFY: CRUCIAL step easy to overlook 
-        obses = next_obses
+    # TRY NOT TO MODIFY: CRUCIAL step easy to overlook 
+    obses = next_obses
 
     if global_step > args.learning_starts and global_step % args.train_frequency == 0:
         if global_step % 100 == 0:
+            # Log the data to TensorBoard
             system_loss = sum(list(losses.values()))
             writer.add_scalar("losses/system_td_loss/", system_loss, global_step)
+            system_actor_loss = sum(list(actor_losses.values()))
+            writer.add_scalar("losses/system_actor_loss/", system_actor_loss, global_step)
 
-            with open(f"{csv_dir}/td_loss.csv", "a", newline="") as csvfile:
+            # Log data to CSV
+            with open(f"{csv_dir}/critic_loss.csv", "a", newline="") as csvfile:
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
                 csv_writer.writerow({**losses, **{'system_loss': system_loss, 'global_step': global_step}})
+            with open(f"{csv_dir}/actor_loss.csv", "a", newline="") as csvfile:    
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_actor_loss', 'global_step'])                        
+                csv_writer.writerow({**actor_losses, **{'system_actor_loss': system_actor_loss, 'global_step': global_step}})
 
     # If all agents are done, log the results and reset the evnironment to continue training
-    if np.prod(list(dones.values())) or global_step % args.max_cycles == args.max_cycles-1:
-        system_episode_reward = sum(list(episode_rewards.values()))
+    if np.prod(list(dones.values())) or global_step % args.max_cycles == args.max_cycles-1: 
+        system_episode_reward = sum(list(episode_rewards.values()))         # Accumulated reward of all agents
+
+        # Calculate the maximum of all max speeds observed from each agent during the episode
+        agent_max_speeds = {agent:0 for agent in agents}
+        for agent in agents:
+            agent_max_speeds[agent] = max(episode_max_speeds[agent])
+        system_episode_max_speed = max(list(agent_max_speeds.values()))
+        system_episode_min_max_speed = min(list(agent_max_speeds.values()))
+        print(" >>> system_episode_max_speed {}".format(agent_max_speeds))
+        print(" >>> system_episode_max_speed {}".format(system_episode_max_speed))
+        print(" >>> system_episode_min_max_speed {}".format(system_episode_min_max_speed))
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
-        print(f"global_step={global_step}, system_episode_reward={system_episode_reward}")
-        diff_1 = max(episode_rewards.values())-min(episode_rewards.values())
-        print(f"system_episode_diff_1={diff_1}")
-        diff_2 = max_ind_rewards-min_ind_rewards
-        print(f"system_episode_diff_2={diff_2}")
-        print(f"max_ind_rewards={max_ind_rewards}")
-        print(f"min_ind_rewards={min_ind_rewards}")
-        max_ind_rewards = 0
-        min_ind_rewards = 0
+        print(f" >>> global_step={global_step}, system_episode_reward={system_episode_reward}")
+        diff_1 = uir_1-lir_1
+        # var_1 = var_1/(cnt-1e-7)
+        lir_2 = min(episode_rewards.values())
+        uir_2 = max(episode_rewards.values())
+        diff_2 = uir_2-lir_2
+        var_2 = np.var(list(episode_rewards.values())) 
+        
+        print(f" >>> system_episode_diff_1={diff_1}")
+        print(f" >>> uir1={uir_1}")
+        print(f" >>> lir1={lir_1}")
+        print(f" >>> system_variance1={var_1}")
+        print(f" >>> system_episode_diff_2={diff_2}")
+        print(f" >>> uir2={uir_2}")
+        print(f" >>> lir2={lir_2}")
+        print(f" >>> system_variance2={var_2}")
 
         # Logging should only be done after we've started training, up until then, the agents are just getting experience
         if global_step > args.learning_starts:
             for agent in agents:
                 writer.add_scalar("charts/episode_reward/" + agent, episode_rewards[agent], global_step)
+            writer.add_scalar("charts/episode_reward/uir_1", uir_1, global_step)
+            writer.add_scalar("charts/episode_reward/lir_1", lir_1, global_step)
+            writer.add_scalar("charts/episode_reward/diff_1", diff_1, global_step)
+            writer.add_scalar("charts/episode_reward/var_1", var_1, global_step)
+
+            writer.add_scalar("charts/episode_reward/uir_2", uir_2, global_step)
+            writer.add_scalar("charts/episode_reward/lir_2", lir_2, global_step)
+            writer.add_scalar("charts/episode_reward/diff_2", diff_2, global_step)
+            writer.add_scalar("charts/episode_reward/var_2", var_2, global_step)
+
             writer.add_scalar("charts/epsilon/", epsilon, global_step)
             writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
 
@@ -434,11 +571,22 @@ for global_step in range(args.total_timesteps):
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
                 csv_writer.writerow({**episode_rewards, **{'system_episode_reward': system_episode_reward, 'global_step': global_step}})
 
+            with open(f"{csv_dir}/episode_max_speeds.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'global_step'])
+                csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
+                                                            'system_episode_min_max_speed': system_episode_min_max_speed,
+                                                            'global_step': global_step}})
+
             # If we're using the SUMO env, also save some data specific to that environment
             if using_sumo:
                 env.unwrapped.save_csv(sumo_csv, global_step)
-
-        obses = env.reset()
+            
+        # Reset the env to continue training            
+        obses, _ = env.reset()
+        lir_1 = 0
+        uir_1 = 0
+        var_1 = 0
+        cnt = 0
 
         # Global states
         if args.global_obs:
@@ -447,7 +595,10 @@ for global_step in range(args.total_timesteps):
 
         if args.render:
             env.render()
+
+        # Reset dictionaries for next episode
         episode_rewards = {agent: 0 for agent in agents}
+        episode_max_speeds = {agent: [0] for agent in agents} 
         actions = {agent: None for agent in agents}
 
 

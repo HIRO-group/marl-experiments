@@ -17,7 +17,7 @@ import torch.nn.functional as F
 import configargparse
 from distutils.util import strtobool
 import numpy as np
-
+import datetime
 
 import random
 import os
@@ -36,9 +36,9 @@ if 'SUMO_HOME' in os.environ:
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
-device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
 
 # TODO: this should probably just go in its own file so it's consistent across all training
+# TODO: May need to update this for actor critic, actor and critic should have the same "forward" structure
 class QNetwork(nn.Module):
     def __init__(self, observation_space_shape, action_space_dim, parameter_sharing_model=False):
         super(QNetwork, self).__init__()
@@ -149,8 +149,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if not args.seed:
-        args.seed = int(time.time()) 
+        args.seed = int(datetime.now()) 
     
+    device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
+
+
     analysis_steps = args.analysis_steps    # Defines which checkpoint will be loaded into the Q model
     parameter_sharing_model = args.parameter_sharing_model  # Flag indicating if we're loading a model from DQN with PS
     nn_directory = args.nn_directory 
@@ -177,6 +180,8 @@ if __name__ == "__main__":
     action_spaces = env.action_spaces
     observation_spaces = env.observation_spaces
     onehot_keys = {agent: i for i, agent in enumerate(agents)}
+    
+    episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
 
     print("\n=================== Environment Information ===================")
     print(" > agents:\n {}".format(agents))
@@ -225,7 +230,7 @@ if __name__ == "__main__":
         observation_spaces[agent].seed(args.seed)
 
     # Initialize the env
-    obses = env.reset()
+    obses, _ = env.reset()
 
     # Initialize observations depending on if parameter sharing was used or not
     if parameter_sharing_model:
@@ -240,6 +245,8 @@ if __name__ == "__main__":
                 onehot = np.zeros(num_agents)
                 onehot[onehot_keys[agent]] = 1.0
                 obses[agent] = np.hstack([onehot, obses[agent]])
+    
+    # Parameter sharing model not used but we still need to check if global observations were used
     else:
         if args.global_obs:
             global_obs = np.hstack(list(obses.values()))
@@ -276,5 +283,19 @@ if __name__ == "__main__":
                     onehot = np.zeros(num_agents)
                     onehot[onehot_keys[agent]] = 1.0
                     next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+        
+        # Accumulate the total episode reward
+        for agent in agents:
+            episode_rewards[agent] += rewards[agent]
 
         obses = next_obses
+
+        # If the simulation is done, print the episode reward and close the env
+        if np.prod(list(dones.values())):
+            system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
+
+            print(" >> TOTAL EPISODE REWARD: {}".format(system_episode_reward))
+
+            break
+    
+    env.close()
