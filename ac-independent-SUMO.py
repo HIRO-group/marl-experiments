@@ -544,7 +544,7 @@ for global_step in range(args.total_timesteps):
             agent_max_speeds[agent] = max(episode_max_speeds[agent])
         system_episode_max_speed = max(list(agent_max_speeds.values()))
         system_episode_min_max_speed = min(list(agent_max_speeds.values()))
-        print(" >>> system_episode_max_speed {}".format(agent_max_speeds))
+        print(" >>> agent_max_speeds {}".format(agent_max_speeds))
         print(" >>> system_episode_max_speed {}".format(system_episode_max_speed))
         print(" >>> system_episode_min_max_speed {}".format(system_episode_min_max_speed))
 

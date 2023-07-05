@@ -30,6 +30,8 @@ import pettingzoo
 # SUMO dependencies
 import sumo_rl
 import sys
+from sumo_custom_observation import CustomObservationFunction
+from sumo_custom_reward import MaxSpeedRewardFunction
 
 
 # Make sure SUMO env variable is set
@@ -207,14 +209,30 @@ if __name__ == "__main__":
     # Sumo must be created using the sumo-rl module
     # Note we have to use the parallel env here to conform to this implementation of dqn
     # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-    env = sumo_rl.parallel_env(net_file=args.net, 
-                    route_file=args.route,
-                    use_gui=False,
-                    max_green=args.max_green,
-                    min_green=args.min_green,
-                    num_seconds=args.sumo_seconds,
-                    reward_fn=args.sumo_reward, 
-                    sumo_warnings=False)    
+    if (args.sumo_reward == "custom"):
+        # Use the custom "max speed" reward function
+        print ( " > Using CUSTOM reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=MaxSpeedRewardFunction,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
+    else:
+        print ( " > Using standard reward")
+        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=args.sumo_reward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)  
 
     agents = env.possible_agents
     num_agents = len(env.possible_agents)
@@ -235,9 +253,14 @@ if __name__ == "__main__":
         action_spaces[agent].seed(args.seed)
         observation_spaces[agent].seed(args.seed)
 
-    # Initialize the CSV header
+    # Initialize the CSV header for the learning curve
     with open(f"{csv_dir}/learning_curve.csv", "w", newline="") as csvfile:
-        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'nn_step'])
+        csv_writer.writeheader()
+
+    # Initialize the csv header for the max speeds file
+    with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'nn_step'])    
         csv_writer.writeheader()
 
     # Loop over all the nn files in the nn directory
@@ -246,7 +269,8 @@ if __name__ == "__main__":
         print(" > Loading network at learning step: {}".format(saved_step))
 
         onehot_keys = {agent: i for i, agent in enumerate(agents)}
-        episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
+        episode_rewards = {agent: 0 for agent in agents}            # Dictionary that maps the each agent to its cumulative reward each episode
+        episode_max_speeds = {agent: [] for agent in agents}        # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
 
         # Construct the Q-Network model 
         # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
@@ -345,24 +369,51 @@ if __name__ == "__main__":
                         onehot[onehot_keys[agent]] = 1.0
                         next_obses[agent] = np.hstack([onehot, next_obses[agent]])
     
-            # Accumulate the total episode reward
+            # Accumulate the total episode reward and max speeds
             for agent in agents:
-                episode_rewards[agent] += rewards[agent]
+                
+               
+               # At the end of a simulation, next_obses is an empty dictionary so don't log it
+                try:
+                    episode_rewards[agent] += rewards[agent]
+                    
+                     # TODO: need to modify this for global observations
+                    episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
+                
+                except:
+                    continue
+                
                 # print(" >>> episode_rewards: {}".format(episode_rewards))
                 # print(" >>> rewards[{}]: {}".format(agent, rewards[agent]))
-
 
             obses = next_obses
 
             # If the simulation is done, print the episode reward and close the env
             if np.prod(list(dones.values())):
+                print(" > Episode complete - logging data")
+
                 system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
+                
+                # Calculate the maximum of all max speeds observed from each agent during the episode
+                agent_max_speeds = {agent:0 for agent in agents}
+                for agent in agents:
+                    agent_max_speeds[agent] = max(episode_max_speeds[agent])
+
+                system_episode_max_speed = max(list(agent_max_speeds.values()))
+                system_episode_min_max_speed = min(list(agent_max_speeds.values()))
 
                 # Log the episode reward to CSV
                 with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
                     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'nn_step'])
                     csv_writer.writerow({**episode_rewards, **{'system_episode_reward': system_episode_reward, 'nn_step': saved_step}})
                 
+                # Log the max speeds
+                with open(f"{csv_dir}/episode_max_speeds.csv", "a", newline="") as csvfile:
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'nn_step'])
+                    csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
+                                                            'system_episode_min_max_speed': system_episode_min_max_speed,
+                                                            'nn_step': saved_step}})
+
                 print(" >> TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
 
                 break
