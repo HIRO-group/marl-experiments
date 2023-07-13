@@ -42,6 +42,7 @@ from pettingzoo.mpe import simple_spread_v3
 import sumo_rl
 import sys
 from sumo_custom_observation import CustomObservationFunction
+from sumo_custom_reward import MaxSpeedRewardFunction
 
 
 if __name__ == "__main__":
@@ -173,27 +174,42 @@ device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cp
 if using_sumo:
     sumo_csv = "{}/_SUMO_alpha{}_gamma{}_{}".format(csv_dir, args.learning_rate, args.gamma, experiment_time)
 
+print("\n=================== Environment Information ===================")
 # Instantiate the environment 
 if using_sumo:
     # Sumo must be created using the sumo-rl module
     # Note we have to use the parallel env here to conform to this implementation of dqn
-    # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-    env = sumo_rl.parallel_env(net_file=args.net, 
-                    route_file=args.route,
-                    use_gui=args.sumo_gui,
-                    max_green=args.max_green,
-                    min_green=args.min_green,
-                    num_seconds=args.sumo_seconds,
-                    reward_fn=args.sumo_reward,
-                    observation_class=CustomObservationFunction,
-                    sumo_warnings=False)
+    
+    if (args.sumo_reward == "custom"):
+        # Use the custom "max speed" reward function
+        print ( " > Using CUSTOM reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=MaxSpeedRewardFunction,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
+    else:
+        print ( " > Using standard reward")
+        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=args.sumo_reward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
 
 else: 
     print(" > ENV ARGS: {}".format(args.env_args))
-    exec(f"env = {args.gym_id}.parallel_env({args.env_args})")
+    exec(f" > env = {args.gym_id}.parallel_env({args.env_args})")
 
 
-print("\n=================== Environment Information ===================")
 agents = env.possible_agents
 print(" > agents:\n {}".format(agents))
 
@@ -394,7 +410,7 @@ if args.render:
     env.render()    # TODO: verify that the sumo env supports render
 
 episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
-episode_max_speeds = {agent: [0] for agent in agents}   # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
+episode_max_speeds = {agent: [] for agent in agents}    # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
 actions = {agent: None for agent in agents}             # Dictionary that maps each agent to the action it selected
 losses = {agent: None for agent in agents}              # Dictionary that maps each agent to the loss values for its critic network
 actor_losses = {agent: None for agent in agents}        # Dictionary that maps each agent to the loss values for its actor network
@@ -528,7 +544,7 @@ for global_step in range(args.total_timesteps):
             agent_max_speeds[agent] = max(episode_max_speeds[agent])
         system_episode_max_speed = max(list(agent_max_speeds.values()))
         system_episode_min_max_speed = min(list(agent_max_speeds.values()))
-        print(" >>> system_episode_max_speed {}".format(agent_max_speeds))
+        print(" >>> agent_max_speeds {}".format(agent_max_speeds))
         print(" >>> system_episode_max_speed {}".format(system_episode_max_speed))
         print(" >>> system_episode_min_max_speed {}".format(system_episode_min_max_speed))
 

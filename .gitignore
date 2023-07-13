@@ -1,4 +1,5 @@
 nn/
 runs/
 csv/
+analysis/
 .venv/

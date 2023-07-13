@@ -28,6 +28,8 @@ import pettingzoo
 import sumo_rl
 import sys
 
+from sumo_custom_observation import CustomObservationFunction
+from sumo_custom_reward import MaxSpeedRewardFunction
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -165,14 +167,30 @@ if __name__ == "__main__":
     # Sumo must be created using the sumo-rl module
     # Note we have to use the parallel env here to conform to this implementation of dqn
     # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-    env = sumo_rl.parallel_env(net_file=args.net, 
-                    route_file=args.route,
-                    use_gui=True,
-                    max_green=args.max_green,
-                    min_green=args.min_green,
-                    num_seconds=args.sumo_seconds,
-                    reward_fn=args.sumo_reward, 
-                    sumo_warnings=False)    
+    if (args.sumo_reward == "custom"):
+        # Use the custom "max speed" reward function
+        print ( " > Using CUSTOM reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=MaxSpeedRewardFunction,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
+    else:
+        print ( " > Using standard reward")
+        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=args.sumo_reward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)  
 
     agents = env.possible_agents
     num_agents = len(env.possible_agents)

@@ -1,3 +1,15 @@
+"""
+sumo_custom_observation.py
+
+Description:
+    Custom obsevation class that adds a "max speed" variable to the end of array returned in the default observation. 
+    The max speed value indicates the maximum speed observed from any vehicle by the agent at that step.
+
+References:
+    Default observation class defined here: https://github.com/LucasAlegre/sumo-rl/blob/main/sumo_rl/environment/observations.py#L28 
+    
+"""
+
 from sumo_rl import ObservationFunction
 from sumo_rl import TrafficSignal
 from gymnasium import spaces
