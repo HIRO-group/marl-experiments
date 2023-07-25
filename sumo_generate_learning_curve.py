@@ -100,6 +100,33 @@ class Actor(nn.Module):
         return action, log_prob, action_probs
 
 
+def CalculateASOMax(agent_max_speeds, speed_limit, num_agents):
+    """
+    Function for calculating The average maximum speed overage (ASOmax) at a given step during an episode,
+    ASO max is essentially the average amount that each agent execeeded a given speed limit. This metric is used
+    in part to evaulate the performance of models that were trained using the "custom speed threshold" reward defined 
+    for the SUMO enviornment
+
+    Note that the speed limit here does not need to match the speed threshold used to train the model
+    
+    :param agent_max_speeds: List of max speeds observed by each agent at this step
+    :param speed_limit: The speed limit to use for comparison in the calculation of ASO max
+    :param num_agents: The total number of agents in the environment
+    :return aso_max: The average maximum speed overage
+    """
+
+    overage = 0.0
+
+    for speed in agent_max_speeds:
+        if speed >= speed_limit:
+            # Only consider speeds that are OVER the speed limit
+            overage += speed
+
+    aso_max = overage/num_agents
+    
+    return aso_max
+
+
 if __name__ == "__main__":
     parser = configargparse.ArgParser(default_config_files=['experiments/sumo-4x4-independent.config'], 
                                       description="Generate the learning curve for agents trained on the SUMO environment")
@@ -260,7 +287,7 @@ if __name__ == "__main__":
 
     # Initialize the csv header for the max speeds file
     with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
-        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'nn_step'])    
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'nn_step'])    
         csv_writer.writeheader()
 
     # Loop over all the nn files in the nn directory
@@ -395,12 +422,20 @@ if __name__ == "__main__":
                 system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
                 
                 # Calculate the maximum of all max speeds observed from each agent during the episode
-                agent_max_speeds = {agent:0 for agent in agents}
+                agent_max_speeds = {agent:0 for agent in agents}    # max speed observed by the agent over the entire episode
+                final_max_speeds = {agent:0 for agent in agents}    # last max speed observed by the agent during the episode
                 for agent in agents:
                     agent_max_speeds[agent] = max(episode_max_speeds[agent])
+                    final_max_speeds[agent] = episode_max_speeds[agent][-1]
 
                 system_episode_max_speed = max(list(agent_max_speeds.values()))
                 system_episode_min_max_speed = min(list(agent_max_speeds.values()))
+
+                # Calculate ASO max at the last step of the episode
+                # TODO: update this to be average of max speed of each episode rather than last max speed of the episode
+                SPEED_LIMIT = 13.89 # TODO: config?
+                aso_max = CalculateASOMax(final_max_speeds.values(), SPEED_LIMIT, num_agents)
+
 
                 # Log the episode reward to CSV
                 with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
@@ -409,9 +444,10 @@ if __name__ == "__main__":
                 
                 # Log the max speeds
                 with open(f"{csv_dir}/episode_max_speeds.csv", "a", newline="") as csvfile:
-                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'nn_step'])
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'nn_step'])
                     csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
                                                             'system_episode_min_max_speed': system_episode_min_max_speed,
+                                                            'system_aso_max': aso_max,
                                                             'nn_step': saved_step}})
 
                 print(" >> TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
