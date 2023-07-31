@@ -100,30 +100,38 @@ class Actor(nn.Module):
         return action, log_prob, action_probs
 
 
-def CalculateASOMax(agent_max_speeds, speed_limit, num_agents):
+def CalculateASOMax(episode_max_speeds, speed_limit):
     """
-    Function for calculating The average maximum speed overage (ASOmax) at a given step during an episode,
-    ASO max is essentially the average amount that each agent execeeded a given speed limit. This metric is used
-    in part to evaulate the performance of models that were trained using the "custom speed threshold" reward defined 
+    Function for calculating The average maximum speed overage (ASOmax) after an episode,
+    ASO max is essentially the average amount that each agent execeeded a given speed limit over the course of an entire episode.
+    This metric is used in part to evaulate the performance of models that were trained using the "custom speed threshold" reward defined 
     for the SUMO enviornment
 
     Note that the speed limit here does not need to match the speed threshold used to train the model
     
-    :param agent_max_speeds: List of max speeds observed by each agent at this step
+    :param episode_max_speeds: Dictionary that maps agents to the max speeds of cars observed each step of an episode
     :param speed_limit: The speed limit to use for comparison in the calculation of ASO max
-    :param num_agents: The total number of agents in the environment
     :return aso_max: The average maximum speed overage
     """
 
     overage = 0.0
+    agents = list(episode_max_speeds.keys())
+    num_agents = len(agents)                        # Total number of agents in system
+    num_steps = len(episode_max_speeds[agents[0]])  # Total number of steps in episode
 
-    for speed in agent_max_speeds:
-        if speed >= speed_limit:
-            # Only consider speeds that are OVER the speed limit
-            overage += speed
+    for agent in agents:
+        for step in range(num_steps):
+            # max speed observed by this agent at this step
+            agent_max_speed = episode_max_speeds[agent][step]
 
-    aso_max = overage/num_agents
+            if agent_max_speed > speed_limit:
+                # Only consider speeds that are OVER the speed limit, 
+                # if they are then add it to the accumulated overage
+                
+                overage += agent_max_speed
     
+    aso_max = overage/(num_agents*num_steps)
+
     return aso_max
 
 
@@ -245,6 +253,8 @@ if __name__ == "__main__":
                                 max_green=args.max_green,
                                 min_green=args.min_green,
                                 num_seconds=args.sumo_seconds,
+                                add_system_info=True,
+                                add_per_agent_info=True,
                                 reward_fn=MaxSpeedRewardFunction,
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)
@@ -257,6 +267,8 @@ if __name__ == "__main__":
                                 max_green=args.max_green,
                                 min_green=args.min_green,
                                 num_seconds=args.sumo_seconds,
+                                add_system_info=True,
+                                add_per_agent_info=True,
                                 reward_fn=args.sumo_reward,
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)  
@@ -287,7 +299,7 @@ if __name__ == "__main__":
 
     # Initialize the csv header for the max speeds file
     with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
-        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'nn_step'])    
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'system_total_stopped', 'nn_step'])    
         csv_writer.writeheader()
 
     # Loop over all the nn files in the nn directory
@@ -379,7 +391,7 @@ if __name__ == "__main__":
 
 
             # Apply all actions to the env
-            next_obses, rewards, dones, _, _ = env.step(actions)
+            next_obses, rewards, dones, truncated, info = env.step(actions)
 
             # If the parameter sharing model was used, we have to add one hot encoding to the observations
             if parameter_sharing_model:
@@ -432,10 +444,15 @@ if __name__ == "__main__":
                 system_episode_min_max_speed = min(list(agent_max_speeds.values()))
 
                 # Calculate ASO max at the last step of the episode
-                # TODO: update this to be average of max speed of each episode rather than last max speed of the episode
                 SPEED_LIMIT = 13.89 # TODO: config?
-                aso_max = CalculateASOMax(final_max_speeds.values(), SPEED_LIMIT, num_agents)
+                # aso_max = CalculateASOMax(final_max_speeds.values(), SPEED_LIMIT, num_agents)
+                aso_max = CalculateASOMax(episode_max_speeds, SPEED_LIMIT)
+                print(" >> EPISODE ASO MAX: {}\n".format(aso_max))
 
+                # Get the total number of cars stopped in the system at the end of the episode
+                info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info
+                system_total_stopped = info['agents_total_stopped']
+                print( ">> TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
 
                 # Log the episode reward to CSV
                 with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
@@ -444,13 +461,15 @@ if __name__ == "__main__":
                 
                 # Log the max speeds
                 with open(f"{csv_dir}/episode_max_speeds.csv", "a", newline="") as csvfile:
-                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'nn_step'])
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'system_total_stopped', 'nn_step'])
                     csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
                                                             'system_episode_min_max_speed': system_episode_min_max_speed,
                                                             'system_aso_max': aso_max,
+                                                            'system_total_stopped': system_total_stopped,
                                                             'nn_step': saved_step}})
-
+                
                 print(" >> TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
+                print(" >>> NOTE: be sure to verify the reward function being used to evaluate this model matches the reward function used to train the model")
 
                 break
     
