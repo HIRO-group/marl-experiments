@@ -4,6 +4,7 @@ sumo_custom_observation.py
 Description:
     Custom obsevation class that adds a "max speed" variable to the end of array returned in the default observation. 
     The max speed value indicates the maximum speed observed from any vehicle by the agent at that step.
+    Note that modifying the output of this function changes the size of the neural network produced when training
 
 References:
     Default observation class defined here: https://github.com/LucasAlegre/sumo-rl/blob/main/sumo_rl/environment/observations.py#L28 
@@ -29,7 +30,9 @@ class CustomObservationFunction(ObservationFunction):
         min_green = [0 if self.ts.time_since_last_phase_change < self.ts.min_green + self.ts.yellow_time else 1]
         density = self.ts.get_lanes_density()
         queue = self.ts.get_lanes_queue()
+        # pressure = [self.ts.get_pressure()] # MODIFYING THE OUTPUT OF THIS FUNCTION REQUIRES RETRAINING
         max_speed = [self.get_max_speed()]
+        # observation = np.array(phase_id + min_green + density + queue + pressure + max_speed, dtype=np.float32)
         observation = np.array(phase_id + min_green + density + queue + max_speed, dtype=np.float32)
         return observation
     
