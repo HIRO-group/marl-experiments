@@ -297,7 +297,7 @@ if __name__ == "__main__":
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'nn_step'])
         csv_writer.writeheader()
 
-    # Initialize the csv header for the max speeds file
+    # Initialize the csv header for the max speeds file 
     with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'system_total_stopped', 'nn_step'])    
         csv_writer.writeheader()
@@ -310,6 +310,7 @@ if __name__ == "__main__":
         onehot_keys = {agent: i for i, agent in enumerate(agents)}
         episode_rewards = {agent: 0 for agent in agents}            # Dictionary that maps the each agent to its cumulative reward each episode
         episode_max_speeds = {agent: [] for agent in agents}        # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
+        # episode_pressures = {agent: [] for agent in agents}         # Dictionary that maps each agent to the pressure at each step of the agent's episode (pressure = #veh leaving - #veh approaching of the intersection)
 
         # Construct the Q-Network model 
         # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
@@ -392,7 +393,8 @@ if __name__ == "__main__":
 
             # Apply all actions to the env
             next_obses, rewards, dones, truncated, info = env.step(actions)
-
+            # info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info
+            # print(" >>>>> INFO: {}".format(info))
             # If the parameter sharing model was used, we have to add one hot encoding to the observations
             if parameter_sharing_model:
                 # Add one hot encoding for either global observations or independent observations
@@ -418,13 +420,14 @@ if __name__ == "__main__":
                     
                      # TODO: need to modify this for global observations
                     episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
+                    # episode_pressures[agent].append(next_obses[agent][-2])  # pressure is the second to last element of the custom observation array
                 
                 except:
                     continue
                 
                 # print(" >>> episode_rewards: {}".format(episode_rewards))
                 # print(" >>> rewards[{}]: {}".format(agent, rewards[agent]))
-
+            # print(" >>>>> episode_pressures: {}".format(episode_pressures))
             obses = next_obses
 
             # If the simulation is done, print the episode reward and close the env
@@ -436,9 +439,11 @@ if __name__ == "__main__":
                 # Calculate the maximum of all max speeds observed from each agent during the episode
                 agent_max_speeds = {agent:0 for agent in agents}    # max speed observed by the agent over the entire episode
                 final_max_speeds = {agent:0 for agent in agents}    # last max speed observed by the agent during the episode
+                # final_pressures = {agent:0 for agent in agents}     # last pressure observed by each agent in the episode
                 for agent in agents:
                     agent_max_speeds[agent] = max(episode_max_speeds[agent])
                     final_max_speeds[agent] = episode_max_speeds[agent][-1]
+                    # final_pressures[agent] = episode_pressures[agent][-2]
 
                 system_episode_max_speed = max(list(agent_max_speeds.values()))
                 system_episode_min_max_speed = min(list(agent_max_speeds.values()))
