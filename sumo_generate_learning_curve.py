@@ -64,7 +64,7 @@ else:
 #         x = self.fc3(x)
 #         return x
 
-# TODO: add config flag to indicate if the Actor model or the critic model should be used
+# TODO: add config flag to indicate if the Actor model or the critic model should be evaluated (each actor-critic model includes model snapshots of both the actor and critic networks)
 # Define the Actor class
 # Based on implementation from here: https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py
 class Actor(nn.Module):
@@ -107,7 +107,7 @@ def CalculateASOMax(episode_max_speeds, speed_limit):
     This metric is used in part to evaulate the performance of models that were trained using the "custom speed threshold" reward defined 
     for the SUMO enviornment
 
-    Note that the speed limit here does not need to match the speed threshold used to train the model
+    Note that the speed limit here does NOT need to match the speed threshold used to train the model
     
     :param episode_max_speeds: Dictionary that maps agents to the max speeds of cars observed each step of an episode
     :param speed_limit: The speed limit to use for comparison in the calculation of ASO max
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     
     # Create CSV file to store the data
     nn_directory = args.nn_directory        
-    nn_dir = f"nn/{nn_directory}"           # Name of directory where the nn was stored during training    
+    nn_dir = f"{nn_directory}"           # Name of directory where the nn was stored during training    
     analysis_time = str(datetime.now()).split('.')[0].replace(':','-')
     csv_dir = f"analysis/{nn_directory+analysis_time}"
     os.makedirs(csv_dir)
@@ -162,7 +162,7 @@ if __name__ == "__main__":
     # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
     if (args.sumo_reward == "custom"):
         # Use the custom "max speed" reward function
-        print ( " > Using CUSTOM reward")
+        print ( " > Evaluating model using CUSTOM reward")
         env = sumo_rl.parallel_env(net_file=args.net, 
                                 route_file=args.route,
                                 use_gui=args.sumo_gui,
@@ -175,7 +175,7 @@ if __name__ == "__main__":
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)
     else:
-        print ( " > Using standard reward")
+        print ( " > Evaluating model using standard reward: {}".format(args.sumo_reward))
         # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
         env = sumo_rl.parallel_env(net_file=args.net, 
                                 route_file=args.route,
@@ -226,11 +226,10 @@ if __name__ == "__main__":
         onehot_keys = {agent: i for i, agent in enumerate(agents)}
         episode_rewards = {agent: 0 for agent in agents}            # Dictionary that maps the each agent to its cumulative reward each episode
         episode_max_speeds = {agent: [] for agent in agents}        # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
-        # episode_pressures = {agent: [] for agent in agents}         # Dictionary that maps each agent to the pressure at each step of the agent's episode (pressure = #veh leaving - #veh approaching of the intersection)
+        # episode_pressures = {agent: [] for agent in agents}       # Dictionary that maps each agent to the pressure at each step of the agent's episode (pressure = #veh leaving - #veh approaching of the intersection)
 
         # Construct the Q-Network model 
-        # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
-        # DQN model was used
+        # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent DQN model was used
         if parameter_sharing_model:
             # Define the shape of the observation space depending on if we're using a global observation or not
             # Regardless, we need to add an array of length num_agents to the observation to account for one hot encoding
@@ -257,8 +256,7 @@ if __name__ == "__main__":
             for agent in agents: 
                 observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
                 # q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n)
-                q_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
-
+                q_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device) 
                 nn_file = "{}/{}-{}.pt".format(nn_dir, saved_step, agent)   # TODO: make the step number configurable
                 q_network[agent].load_state_dict(torch.load(nn_file))
 
@@ -295,22 +293,20 @@ if __name__ == "__main__":
             # Populate the action dictionary
             for agent in agents:
                 # TODO: uncomment once the critic/actor flag is added
+                # The way actions are obtained are slightly different between the actor and critic classes
                 # # # if parameter_sharing_model:
                 # # #     logits = q_network.forward(obses[agent].reshape((1,)+obses[agent].shape))
                 # # # else:
                 # # #     logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
-
                 # # # actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
 
-                ## Testing actor version
                 action, _, _ = q_network[agent].get_action(obses[agent])
                 actions[agent] = action.detach().cpu().numpy()
 
 
             # Apply all actions to the env
             next_obses, rewards, dones, truncated, info = env.step(actions)
-            # info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info
-            # print(" >>>>> INFO: {}".format(info))
+
             # If the parameter sharing model was used, we have to add one hot encoding to the observations
             if parameter_sharing_model:
                 # Add one hot encoding for either global observations or independent observations
@@ -328,12 +324,9 @@ if __name__ == "__main__":
     
             # Accumulate the total episode reward and max speeds
             for agent in agents:
-                
-               
                # At the end of a simulation, next_obses is an empty dictionary so don't log it
                 try:
                     episode_rewards[agent] += rewards[agent]
-                    
                      # TODO: need to modify this for global observations
                     episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
                     # episode_pressures[agent].append(next_obses[agent][-2])  # pressure is the second to last element of the custom observation array
@@ -341,9 +334,6 @@ if __name__ == "__main__":
                 except:
                     continue
                 
-                # print(" >>> episode_rewards: {}".format(episode_rewards))
-                # print(" >>> rewards[{}]: {}".format(agent, rewards[agent]))
-            # print(" >>>>> episode_pressures: {}".format(episode_pressures))
             obses = next_obses
 
             # If the simulation is done, print the episode reward and close the env
@@ -366,14 +356,13 @@ if __name__ == "__main__":
 
                 # Calculate ASO max at the last step of the episode
                 SPEED_LIMIT = 13.89 # TODO: config?
-                # aso_max = CalculateASOMax(final_max_speeds.values(), SPEED_LIMIT, num_agents)
                 aso_max = CalculateASOMax(episode_max_speeds, SPEED_LIMIT)
-                print(" >> EPISODE ASO MAX: {}\n".format(aso_max))
+                print(" >> EPISODE ASO MAX: {} using speed limit of: {}\n".format(aso_max, SPEED_LIMIT))
 
                 # Get the total number of cars stopped in the system at the end of the episode
                 info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info
                 system_total_stopped = info['agents_total_stopped']
-                print( ">> TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
+                print( " >> TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
 
                 # Log the episode reward to CSV
                 with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
@@ -390,7 +379,7 @@ if __name__ == "__main__":
                                                             'nn_step': saved_step}})
                 
                 print(" >> TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
-                print(" >>> NOTE: be sure to verify the reward function being used to evaluate this model matches the reward function used to train the model")
+                print(" >>> NOTE: The reward function being used to evaluate this model may not match the reward function used to train the model")
 
                 break
     
