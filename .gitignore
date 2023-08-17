@@ -3,3 +3,4 @@ runs/
 csv/
 analysis/
 .venv/
+__pycache__/
