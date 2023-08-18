@@ -257,7 +257,7 @@ if __name__ == "__main__":
                 observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
                 # q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n)
                 q_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device) 
-                nn_file = "{}/{}-{}.pt".format(nn_dir, saved_step, agent)   # TODO: make the step number configurable
+                nn_file = "{}/{}-{}.pt".format(nn_dir, saved_step, agent)   
                 q_network[agent].load_state_dict(torch.load(nn_file))
 
         # Initialize the env
