@@ -285,7 +285,7 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
 q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
 target_network = {} # Dictionary for storing target networks (maps agent to a network)
-optimizer = {}  # Dictionary for storing 
+optimizer = {}  # Dictionary for storing optimizers for each RL problem
 
 for agent in agents:
     observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape

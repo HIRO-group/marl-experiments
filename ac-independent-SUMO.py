@@ -383,7 +383,7 @@ for global_step in range(args.total_timesteps):
         
         # ALGO LOGIC: critic training
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
-        if global_step > args.learning_starts and global_step % args.train_frequency == 0:
+        if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
             # print(" >>> s_obses: {}".format(s_obses))
             with torch.no_grad():
