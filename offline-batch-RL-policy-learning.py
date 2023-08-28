@@ -117,7 +117,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 def OfflineBatchRL(env:sumo_rl.parallel_env,
                    dataset: Dataset,
                    config_args,
-                   constraint:str="") -> (QNetwork, QNetwork):
+                   constraint:str="") -> (dict, dict):
 
     # Check inputs
     if (constraint != "queue") or (constraint != "speed_overage")
@@ -139,7 +139,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         expectation_pi = 1/t * (policy + ((t-1)*expectation_pi))    # TODO: review this step
 
         # Update expectation for G2
-        expectation_G2 = 1/t * (G2_pi + ((t-1)*expectation_G2_prev))
+        expectation_G2 = 1/t * (G2_pi + ((t-1)*expectation_G2_prev)) # TODO: review this step
 
         # Check exit condition
         if (np.linalg.norm(expectation_G2 - expectation_G2_prev)**2 <= OMEGA):
@@ -177,6 +177,7 @@ def FittedQIteration(env:sumo_rl.parallel_env,
     # TRY NOT TO MODIFY: start the game
     obses, _ = env.reset()
 
+    # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
     for global_step in range(config_args.total_timesteps):
 
         # Decay epsilon as the number of iterations increase
@@ -193,7 +194,8 @@ def FittedQIteration(env:sumo_rl.parallel_env,
                 logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
                 actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
 
-
+        # TODO: We do not need these in this implementation of FQI because we do not need to update the provided
+        # dataset. Therefore, the env is not necessary in here
         next_obses, rewards, dones, _, _ = env.step(actions)
 
         if config_args.global_obs:
