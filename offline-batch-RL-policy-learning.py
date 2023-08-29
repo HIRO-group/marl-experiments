@@ -3,6 +3,7 @@ offline-batch-RL-policy-learning.py
 
 Description:
 
+
 Usage:
 
 
@@ -44,22 +45,20 @@ else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
 
-def CalculateMaxSpeedOverage(max_speeds, speed_limit) -> :
+def CalculateMaxSpeedOverage(max_speed:float, speed_limit:float) -> float:
     """
     Calculate how much the agents' max speeds exceeded some speed limit
+    :param max_speed: Max speed of all cars observed by the agent (assumed at a single step)
+    :param speed_limit: User defined threshold over which the overage is calculated
+    :returns How much the max speed exceeded the speed limit
     """
-    agents = list(max_speeds.keys())
-    agent_overages = {agent : 0 for agent in agents}
 
-    for agent in agents:
-        overage = 0.0
-        agent_max_speed = max_speeds[agent]
+    overage = 0.0
 
-        if agent_max_speed > speed_limit:
-            overage = agent_max_speed - speed_limit
+    if max_speed > speed_limit:
+        overage = max_speed - speed_limit
 
-        agent_overages[agent] = overage
-
+    return overage
 
 def GenerateDataset(env: sumo_rl.parallel_env, 
                     q_network: Actor, 
@@ -89,7 +88,6 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     # Define empty dictionary tha maps agents to actions
     actions = {agent: None for agent in agents}
     action_spaces = env.action_spaces
-    max_speeds = {agent: 0 for agent in agents}
 
     # Define dictionaries to hold the values of the constraints (g1 and g2) each step
     constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its MAX SPEED OVERAGE for this step
@@ -115,10 +113,10 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
             # Caclulate constraints and add the experience to the dataset
             for agent in agents:
-                 max_speeds[agent] = next_obses[agent][-1]
-                 constraint_1[agent] = CalculateMaxSpeedOverage(max_speeds, SPEED_OVERAGE_THRESHOLD)
+                 max_speed_observed_by_agent = next_obses[agent][-1]
+                 constraint_1[agent] = CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
                  constraint_2[agent] = rewards[agent]
-                 dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent, constraint_2[agent]]))
+                 dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent]))
 
     stop_time = datetime.now()
     print(">> Dataset generation complete")
