@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 
+import numpy as np
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -53,3 +54,25 @@ class Actor(nn.Module):
         action_probs = policy_dist.probs
         log_prob = F.log_softmax(logits, dim=-1)
         return action, log_prob, action_probs
+    
+
+
+def one_hot_q_values(q_values):
+    '''
+    Convert a tensor of q_values to one-hot encoded tensors
+    For example if Q(s,a) = [0.1, 0.5, 0.7] for a in A then
+    this function should return [0, 0, 1]
+    '''
+    # print(" >>>> q_values shape: {}".format(q_values.shape))
+    one_hot_values = np.zeros(q_values.shape)
+
+    for idx in range(len(q_values)):
+
+        # Find index of max Q(s,a)
+        max_idx = torch.argmax(q_values[idx])
+
+        # Set the value corresponding to this index to 1
+        one_hot_values[idx, max_idx] = 1.0
+
+    # Convert np array to tensor before returning
+    return torch.from_numpy(one_hot_values)    

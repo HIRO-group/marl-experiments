@@ -31,7 +31,7 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 from MARLConfigParser import MARLConfigParser
 
 # Custom modules 
-from actor_critic import Actor, QNetwork
+from actor_critic import Actor, QNetwork, one_hot_q_values
 from dataset import Dataset
 from linear_schedule import LinearSchedule
 
@@ -60,11 +60,12 @@ def CalculateMaxSpeedOverage(max_speed:float, speed_limit:float) -> float:
 
     return overage
 
+
 def GenerateDataset(env: sumo_rl.parallel_env, 
                     q_network: Actor, 
                     optimal_action_ratio:float = 0.8, 
                     num_episodes:int=100, 
-                    episode_steps=1000) -> Dataset():
+                    episode_steps=1000) -> Dataset:
     """
     :param env: The sumo environment
     :param q_netowrk: The trained neural network used to generate the dataset by acting in the environment
@@ -93,11 +94,14 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its MAX SPEED OVERAGE for this step
     constraint_2 = {agent : 0 for agent in agents}  # Maps each agent to the NUBMER OF CARS STOPPED for this step
 
-    obses, _ = env.reset()
+    for episode in range(num_episodes):
+        if (episode % 100 == 0):
+            print(f">>> Episode: {episode}")
 
-    for episode in num_episodes:
+        # Reset the environment
+        obses, _ = env.reset()
 
-        for step in episode_steps:
+        for step in range(episode_steps):
 
             # Set the action for each agent
             for agent in agents:
@@ -110,6 +114,10 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
             # Apply all actions to the env
             next_obses, rewards, dones, truncated, info = env.step(actions)
+
+            if np.prod(list(dones.values())):
+                # Start the next episode
+                break
 
             # Caclulate constraints and add the experience to the dataset
             for agent in agents:
@@ -131,22 +139,43 @@ def OfflineBatchRL(observation_spaces:dict,
                    config_args,
                    constraint:str="") -> (dict, dict):
 
+    print(f"> Performing batch offline reinforcement learning")
+    start_time = datetime.now()
+
     # Check inputs
-    if (constraint != "queue") or (constraint != "speed_overage")
-        print("ERROR: Constraint function '{}' not recognized, unable to perform Offline Batch RL".format(constraint))
+    if not ((constraint == "queue") or (constraint == "speed_overage")):
+        print(f"ERROR: Constraint function '{constraint}' not recognized, unable to perform Offline Batch RL")
+        return {}, {}
+    else:
+        print(f">> Constraint '{constraint}' recognized!")
 
     # TODO: could make these configs
-    MAX_NUM_ROUNDS = 20
+    MAX_NUM_ROUNDS = 2
     OMEGA = 0.1
     expectation_G2_prev = 0 # TODO: Initialize randomly
 
-    for t in MAX_NUM_ROUNDS:
-
+    for t in range(MAX_NUM_ROUNDS):
+        print(f">> BEGINNING ROUND: {t}")
         # Learn a policy that optimizes actions for the "g2" constraint
-        policies = FittedQIteration(observation_spaces, action_spaces, agents, dataset, config_args, constraint=constraint)  # TODO: Implement
+        # This is essentially the "actor", policies here are represented as probability density functions of taking an action given a state
+        policies = FittedQIteration(observation_spaces, 
+                                    action_spaces, 
+                                    agents, 
+                                    dataset, 
+                                    config_args, 
+                                    constraint=constraint) 
+        # TODO: save the policy here and add ability to load?
 
         # Evaluate G_2^pi 
-        G2_pi = FittedQEvaluation(policies, constraint=constraint)   # TODO: Implement
+        # This is essentially the "critic"
+        G2_pi = FittedQEvaluation(observation_spaces, 
+                                    action_spaces, 
+                                    agents,
+                                    policies,
+                                    dataset, 
+                                    config_args, 
+                                    constraint=constraint) 
+        # TODO: save the critic here and add ability to load?
 
         # Update expectation for pi
         expectation_pi = 1/t * (policies + ((t-1)*expectation_pi))    # TODO: review this step
@@ -157,6 +186,11 @@ def OfflineBatchRL(observation_spaces:dict,
         # Check exit condition
         if (np.linalg.norm(expectation_G2 - expectation_G2_prev)**2 <= OMEGA):
             break
+    
+    stop_time = datetime.now()
+    print("> Batch offline reinforcement learning")
+    print(">> Total execution time: {}".format(stop_time-start_time))
+
 
     return expectation_pi, expectation_G2
 
@@ -169,6 +203,7 @@ def FittedQIteration(observation_spaces:dict,
                      constraint:str="") -> dict:
     """
     Implementation of Fitted Q Iteration with function approximation for offline learning of a policy
+    Note that this implementation utilizes an "actor-critic" approach to solve the RL problem
     (algorithm 4 from Le, et. al)
 
     :param observation_spaces:
@@ -182,19 +217,24 @@ def FittedQIteration(observation_spaces:dict,
     print(">> Beginning Fitted Q Iteration")
     start_time = datetime.now()
 
-    q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
-    target_network = {} # Dictionary for storing target networks (maps agent to a network)
-    optimizer = {}  # Dictionary for storing optimizers for each RL problem
-    
+    q_network = {}          # Dictionary for storing q-networks (maps agent to a q-network)
+    actor_network = {}      # Dictionary for storing actor networks (maps agents to a network)
+    target_network = {}     # Dictionary for storing target networks (maps agent to a network)
+    optimizer = {}          # Dictionary for storing optimizers for each RL problem
+    actor_optimizer = {}    # Dictionary for storing the optimizers used to train the actor networks 
+
     for agent in agents:
         observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
-        q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+        q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device) 
+        actor_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
         target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
         target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
         optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
+        actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=config_args.learning_rate)
 
-    # Define loss function as MSE loss
+    # Define loss functions for the critic and actor
     loss_fn = nn.MSELoss() 
+    actor_loss_fn = nn.CrossEntropyLoss()
 
     # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
     for global_step in range(config_args.total_timesteps):
@@ -206,7 +246,6 @@ def FittedQIteration(observation_spaces:dict,
         # Training for each agent
         for agent in agents:
 
-            # TODO: should this just happen every step in FQI? Or should  should we leave in global_step % args.train_frequency == 0
             if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
                 
                 # Sample data from the dataset
@@ -220,28 +259,43 @@ def FittedQIteration(observation_spaces:dict,
                     # Calculate the full TD target 
                     # Note that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
-                    if (constraint == "queue"):
+                    if (constraint == "speed_overage"):
                         # Use the "g1" constraint
                         td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_min 
 
-                    elif (constraint == "speed_overage"):
+                    elif (constraint == "queue"):
                         # Use the "g2" constraint
                         td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_min 
 
                     else: 
-                        print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Iteration".format(constraint))
+                        print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
 
+                q_values = q_network[agent].forward(s_obses)
                 old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
                 loss = loss_fn(td_target, old_val)
 
-                # optimize the model
+                # Optimize the model for the critic
                 optimizer[agent].zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), config_args.max_grad_norm)
                 optimizer[agent].step()
 
-                # update the target network
-                # TODO: should this just happen every time training occurs in FQI? 
+
+                # Actor training
+                a, log_pi, action_probs = actor_network[agent].get_action(s_obses)
+
+                # Compute the loss for this agent's actor
+                # NOTE: Actor uses cross-entropy loss function where
+                # input is the policy dist and the target is the value function with one-hot encoding applied
+                q_values_one_hot = one_hot_q_values(q_values)
+                actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
+
+                actor_optimizer[agent].zero_grad()
+                actor_loss.backward()
+                nn.utils.clip_grad_norm_(list(actor_network[agent].parameters()), config_args.max_grad_norm)
+                actor_optimizer[agent].step()
+
+                # Update the target network
                 if global_step % args.target_network_frequency == 0:
                     target_network[agent].load_state_dict(q_network[agent].state_dict())
 
@@ -249,7 +303,7 @@ def FittedQIteration(observation_spaces:dict,
     print(">> Fitted Q Iteration complete")
     print(">>> Total execution time: {}".format(stop_time-start_time))
     
-    return q_network
+    return actor_network
 
 
 def FittedQEvaluation(observation_spaces:dict,
@@ -309,10 +363,9 @@ def FittedQEvaluation(observation_spaces:dict,
                 s_obses, s_actions, s_next_obses, s_g1s, s_g2s = dataset[agent].sample(config_args.batch_size)
                 
                 # Use the sampled next observations (x') to generate actions according to the provided policy
-                # NOTE this method of getting actions is identical to how it is performed in DQN
-                logits = policy[agent].forward(s_obses.reshape((1,)+s_obses.shape))
-                actions_for_agent = torch.argmax(logits, dim=1).tolist()[0]
-
+                # NOTE this method of getting actions is identical to how it is performed in actor-critic
+                actions_for_agent, _, _ = policy[agent].get_action(s_obses)
+                
                 # Compute the target
                 # NOTE That this is the only thing different between FQE and FQI
                 with torch.no_grad():
@@ -480,7 +533,7 @@ if __name__ == "__main__":
     dataset = GenerateDataset(env, 
                               q_network, 
                               optimal_action_ratio=0.8, 
-                              num_episodes=100, 
+                              num_episodes=2,   # TODO: Update this once we done debugging 
                               episode_steps=args.sumo_seconds)
 
     """
@@ -488,5 +541,10 @@ if __name__ == "__main__":
         Use the generated dataset to learn a new policy 
         Essentially we want to evaluate the new policy, E[pi] and the constraint function E[G]
     """
-    policy_expectation, constraint_expectation = OfflineBatchRL(env, dataset, args, constraint="queue")
+    policy_expectation, constraint_expectation = OfflineBatchRL(observation_spaces,
+                                                                action_spaces,
+                                                                agents, 
+                                                                dataset, 
+                                                                args, 
+                                                                constraint="queue")
 
