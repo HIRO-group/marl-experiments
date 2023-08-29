@@ -300,7 +300,7 @@ print(device.__repr__())
 print(q_network[agent]) # network of last agent
 
 # TRY NOT TO MODIFY: start the game
-obses = env.reset()
+obses, _ = env.reset()
 
 # Global states
 if args.global_obs:
@@ -358,7 +358,11 @@ for global_step in range(args.total_timesteps):
         if global_step > args.learning_starts and global_step % args.train_frequency == 0:
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
             with torch.no_grad():
+                
                 target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
+                print(">>>>>>>>> TARGET: {}".format(target_network[agent].forward(s_next_obses)))
+                print()
+                print(">>>>>>>>> TARGET MAX: {}".format(target_max))
                 td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
             old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
             loss = loss_fn(td_target, old_val)
@@ -441,7 +445,7 @@ for global_step in range(args.total_timesteps):
                 env.unwrapped.save_csv(sumo_csv, global_step)
             
         # Reset the env to continue training            
-        obses = env.reset()
+        obses, _ = env.reset()
         lir_1 = 0
         uir_1 = 0
         var_1 = 0

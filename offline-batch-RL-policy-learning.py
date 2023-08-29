@@ -1,4 +1,15 @@
+"""
+offline-batch-RL-policy-learning.py
 
+Description:
+
+Usage:
+
+
+References:
+
+
+"""
 
 import torch
 import torch.nn as nn
@@ -24,7 +35,6 @@ from dataset import Dataset
 from linear_schedule import LinearSchedule
 
 
-
 # Set up the system and environement
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -32,6 +42,7 @@ if 'SUMO_HOME' in os.environ:
     sys.path.append(tools)
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
+
 
 def CalculateMaxSpeedOverage(max_speeds, speed_limit) -> :
     """
@@ -114,8 +125,11 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     print(">>> Total execution time: {}".format(stop_time-start_time))
     return dataset
 
-def OfflineBatchRL(env:sumo_rl.parallel_env,
-                   dataset: Dataset,
+
+def OfflineBatchRL(observation_spaces:dict,
+                   action_spaces:dict,
+                   agents:list,
+                   dataset: dict,
                    config_args,
                    constraint:str="") -> (dict, dict):
 
@@ -123,6 +137,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     if (constraint != "queue") or (constraint != "speed_overage")
         print("ERROR: Constraint function '{}' not recognized, unable to perform Offline Batch RL".format(constraint))
 
+    # TODO: could make these configs
     MAX_NUM_ROUNDS = 20
     OMEGA = 0.1
     expectation_G2_prev = 0 # TODO: Initialize randomly
@@ -130,13 +145,13 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     for t in MAX_NUM_ROUNDS:
 
         # Learn a policy that optimizes actions for the "g2" constraint
-        policy = FittedQIteration(env, dataset, config_args, constraint=constraint)  # TODO: Implement
+        policies = FittedQIteration(observation_spaces, action_spaces, agents, dataset, config_args, constraint=constraint)  # TODO: Implement
 
         # Evaluate G_2^pi 
-        G2_pi = FittedQEvaluation(policy, constraint=constraint)   # TODO: Implement
+        G2_pi = FittedQEvaluation(policies, constraint=constraint)   # TODO: Implement
 
         # Update expectation for pi
-        expectation_pi = 1/t * (policy + ((t-1)*expectation_pi))    # TODO: review this step
+        expectation_pi = 1/t * (policies + ((t-1)*expectation_pi))    # TODO: review this step
 
         # Update expectation for G2
         expectation_G2 = 1/t * (G2_pi + ((t-1)*expectation_G2_prev)) # TODO: review this step
@@ -147,17 +162,27 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
     return expectation_pi, expectation_G2
 
-def FittedQIteration(env:sumo_rl.parallel_env, 
-                     dataset:Dataset, 
+
+def FittedQIteration(observation_spaces:dict,
+                     action_spaces:dict,
+                     agents:list,
+                     dataset:dict, 
                      config_args, 
                      constraint:str="") -> dict:
+    """
+    Implementation of Fitted Q Iteration with function approximation for offline learning of a policy
+    (algorithm 4 from Le, et. al)
+
+    :param observation_spaces:
+    :param action_spaces:
+    :param agents:
+    :param dataset:
+    :param constraint:
+    """
+
 
     print(">> Beginning Fitted Q Iteration")
     start_time = datetime.now()
-
-    agents = env.possible_agents
-    observation_spaces = env.observation_spaces
-    action_spaces = env.action_spaces
 
     q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
     target_network = {} # Dictionary for storing target networks (maps agent to a network)
@@ -172,34 +197,12 @@ def FittedQIteration(env:sumo_rl.parallel_env,
 
     # Define loss function as MSE loss
     loss_fn = nn.MSELoss() 
-    actions = {agent: None for agent in agents}
-
-    # TRY NOT TO MODIFY: start the game
-    obses, _ = env.reset()
 
     # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
     for global_step in range(config_args.total_timesteps):
 
-        # Decay epsilon as the number of iterations increase
-        epsilon = LinearSchedule(config_args.start_e, 
-                                 config_args.end_e, 
-                                 config_args.exploration_fraction*config_args.total_timesteps, 
-                                 global_step)
-
-        # Set the action for each agent using an epsilon greedy approach
-        for agent in agents:
-            if random.random() < epsilon:
-                actions[agent] = action_spaces[agent].sample()
-            else:
-                logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
-                actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
-
-        # TODO: We do not need these in this implementation of FQI because we do not need to update the provided
-        # dataset. Therefore, the env is not necessary in here
-        next_obses, rewards, dones, _, _ = env.step(actions)
-
         if config_args.global_obs:
-            print("ERROR: global observations not yet supported for FittedQIteration")
+            print("ERROR: global observations not supported for FittedQIteration")
             return {}
 
         # Training for each agent
@@ -244,19 +247,115 @@ def FittedQIteration(env:sumo_rl.parallel_env,
                 if global_step % args.target_network_frequency == 0:
                     target_network[agent].load_state_dict(q_network[agent].state_dict())
 
-        # TRY NOT TO MODIFY: CRUCIAL step easy to overlook 
-        obses = next_obses
-
-        if np.prod(list(dones.values())) or (global_step % config_args.max_cycles == config_args.max_cycles-1):
-            
-            # Reset the env to continue training            
-            obses, _ = env.reset()
-            actions = {agent: None for agent in agents}
-
     stop_time = datetime.now()
     print(">> Fitted Q Iteration complete")
     print(">>> Total execution time: {}".format(stop_time-start_time))
+    
     return q_network
+
+
+def FittedQEvaluation(observation_spaces:dict,
+                     action_spaces:dict,
+                     agents:list,
+                     policy:dict,
+                     dataset:dict, 
+                     config_args, 
+                     constraint:str="") -> dict:
+    """
+    Implementation of Fitted Off-Policy Evaluation with function approximation for offline evaluation 
+    of a policy
+    (algorithm 3 from Le, et. al)
+
+    :param observation_spaces:
+    :param action_spaces:
+    :param agents:
+    :param policy:
+    :param dataset:
+    :param config_args:
+    :param constraint:
+    """
+
+
+    print(">> Beginning Fitted Q Evaluation")
+    start_time = datetime.now()
+
+    q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
+    target_network = {} # Dictionary for storing target networks (maps agent to a network)
+    optimizer = {}  # Dictionary for storing optimizers for each RL problem
+    actions = {}
+
+    for agent in agents:
+        observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
+        q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+        target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+        target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
+        optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
+        actions[agent] = None
+
+    # Define loss function as MSE loss
+    loss_fn = nn.MSELoss() 
+
+    # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
+    for global_step in range(config_args.total_timesteps):
+
+        if config_args.global_obs:
+            print("ERROR: global observations not supported for FittedQEvaluation")
+            return {}
+
+        # Training for each agent
+        for agent in agents:
+
+            if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
+                
+                # Sample data from the dataset
+                s_obses, s_actions, s_next_obses, s_g1s, s_g2s = dataset[agent].sample(config_args.batch_size)
+                
+                # Use the sampled next observations (x') to generate actions according to the provided policy
+                # NOTE this method of getting actions is identical to how it is performed in DQN
+                logits = policy[agent].forward(s_obses.reshape((1,)+s_obses.shape))
+                actions_for_agent = torch.argmax(logits, dim=1).tolist()[0]
+
+                # Compute the target
+                # NOTE That this is the only thing different between FQE and FQI
+                with torch.no_grad():
+                    # Calculate Q(s',pi(s'))
+                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent))
+
+                    # Calculate the full TD target 
+                    # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
+                    # learn the policy
+                    if (constraint == "queue"):
+                        # Use the "g1" constraint
+                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target 
+
+                    elif (constraint == "speed_overage"):
+                        # Use the "g2" constraint
+                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target 
+
+                    else: 
+                        print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Iteration".format(constraint))
+
+                # TODO: when calculating the "old value" should s_actions be used here? or should actions_for_agent? (i.e. should they come from
+                # experience tuple or policy)
+                old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+                loss = loss_fn(td_target, old_val)
+
+                # optimize the model
+                optimizer[agent].zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), config_args.max_grad_norm)
+                optimizer[agent].step()
+
+                # Update the target network
+                if global_step % args.target_network_frequency == 0:
+                    target_network[agent].load_state_dict(q_network[agent].state_dict())
+
+    stop_time = datetime.now()
+    print(">> Fitted Q Evaluation complete")
+    print(">>> Total execution time: {}".format(stop_time-start_time))
+    
+    return q_network
+
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 if __name__ == "__main__":
