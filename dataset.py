@@ -15,16 +15,17 @@ class Dataset():
     
     def sample(self, n):
         mini_batch = random.sample(self.buffer, n)
-        s_lst, a_lst, s_prime_lst, g1_list, g2_list = [], [], [], [], []
+        s_lst, a_lst, s_prime_lst, g1_list, g2_list, dones_list = [], [], [], [], [], []
         
         for transition in mini_batch:
-            s, a, s_prime, g1, g2 = transition
+            s, a, s_prime, g1, g2, dones = transition
             s_lst.append(s)
             a_lst.append(a)
             s_prime_lst.append(s_prime)
             g1_list.append(g1)
             g2_list.append(g2)
+            dones_list.append(dones)
 
         return np.array(s_lst), np.array(a_lst), \
                np.array(s_prime_lst), np.array(g1_list), \
-               np.array(g2_list)
+               np.array(g2_list), np.array(dones_list)

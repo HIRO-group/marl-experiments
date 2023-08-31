@@ -124,7 +124,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
                  max_speed_observed_by_agent = next_obses[agent][-1]
                  constraint_1[agent] = CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
                  constraint_2[agent] = rewards[agent]
-                 dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent]))
+                 dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
 
     stop_time = datetime.now()
     print(">> Dataset generation complete")
@@ -137,6 +137,7 @@ def OfflineBatchRL(observation_spaces:dict,
                    agents:list,
                    dataset: dict,
                    config_args,
+                nn_save_dir:str,
                    constraint:str="") -> (dict, dict):
 
     print(f"> Performing batch offline reinforcement learning")
@@ -165,7 +166,10 @@ def OfflineBatchRL(observation_spaces:dict,
                                     config_args, 
                                     constraint=constraint) 
         # TODO: save the policy here and add ability to load?
-
+        # Save the policy every round
+        for a in agents:
+            torch.save(policies[a].state_dict(), f"{nn_save_dir}/policies/policy_{t}-{agent}.pt")
+        
         # Evaluate G_2^pi 
         # This is essentially the "critic"
         G2_pi = FittedQEvaluation(observation_spaces, 
@@ -174,8 +178,11 @@ def OfflineBatchRL(observation_spaces:dict,
                                     policies,
                                     dataset, 
                                     config_args, 
-                                    constraint=constraint) 
-        # TODO: save the critic here and add ability to load?
+                                    constraint=constraint)
+        # Save the value function every round
+        for a in agents:
+            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/constraint_{t}-{agent}.pt")        
+        
 
         # Update expectation for pi
         expectation_pi = 1/t * (policies + ((t-1)*expectation_pi))    # TODO: review this step
@@ -186,10 +193,14 @@ def OfflineBatchRL(observation_spaces:dict,
         # Check exit condition
         if (np.linalg.norm(expectation_G2 - expectation_G2_prev)**2 <= OMEGA):
             break
-    
+
+        round_completeion_time = datetime.now()
+        print(f">>> Round {t} complete!")
+        print(f">>> Total execution time: {round_completeion_time-start_time}")
+
     stop_time = datetime.now()
-    print("> Batch offline reinforcement learning")
-    print(">> Total execution time: {}".format(stop_time-start_time))
+    print(f"> Batch offline reinforcement learning")
+    print(f">> Total execution time: {stop_time-start_time}")
 
 
     return expectation_pi, expectation_G2
@@ -249,7 +260,7 @@ def FittedQIteration(observation_spaces:dict,
             if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
                 
                 # Sample data from the dataset
-                s_obses, s_actions, s_next_obses, s_g1s, s_g2s = dataset[agent].sample(config_args.batch_size)
+                s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
                 
                 # Compute the target
                 with torch.no_grad():
@@ -261,11 +272,11 @@ def FittedQIteration(observation_spaces:dict,
                     # learn the policy
                     if (constraint == "speed_overage"):
                         # Use the "g1" constraint
-                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_min 
+                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_min * (1 - torch.Tensor(s_dones).to(device))
 
                     elif (constraint == "queue"):
                         # Use the "g2" constraint
-                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_min 
+                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_min * (1 - torch.Tensor(s_dones).to(device))
 
                     else: 
                         print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
@@ -360,7 +371,7 @@ def FittedQEvaluation(observation_spaces:dict,
             if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
                 
                 # Sample data from the dataset
-                s_obses, s_actions, s_next_obses, s_g1s, s_g2s = dataset[agent].sample(config_args.batch_size)
+                s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
                 
                 # Use the sampled next observations (x') to generate actions according to the provided policy
                 # NOTE this method of getting actions is identical to how it is performed in actor-critic
@@ -373,18 +384,18 @@ def FittedQEvaluation(observation_spaces:dict,
                     # print(f"target_network[agent].forward(s_next_obses).size() {target_network[agent].forward(s_next_obses).size()}")
                     # print(f"actions_for_agent.size() {actions_for_agent.size()}")
                     # print(f"actions_for_agent: {actions_for_agent}")
-                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent.view(-1,1)))
+                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent.view(-1,1))).squeeze()
 
                     # Calculate the full TD target 
                     # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
                     if (constraint == "queue"):
                         # Use the "g1" constraint
-                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target 
+                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
                     elif (constraint == "speed_overage"):
                         # Use the "g2" constraint
-                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target 
+                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
                     else: 
                         print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Iteration".format(constraint))
@@ -425,8 +436,16 @@ if __name__ == "__main__":
 
     analysis_steps = args.analysis_steps                    # Defines which checkpoint will be loaded into the Q model
     parameter_sharing_model = args.parameter_sharing_model  # Flag indicating if we're loading a model from DQN with PS
-    nn_directory = args.nn_directory 
-    nn_dir = f"{nn_directory}"                              # Name of directory containing the stored nn from training
+    nn_load_directory = args.nn_directory 
+    nn_dir = f"{nn_load_directory}"                              # Name of directory containing the stored nn from training
+    
+    # Initialize directories for logging, note that that models will be saved to subfolders created in the directory that was used to 
+    # generate the dataset
+    experiment_time = str(datetime.now()).split('.')[0].replace(':','-')   
+    experiment_name = "{}__N{}__exp{}__seed{}__{}".format(args.gym_id, args.N, args.exp_name, args.seed, experiment_time)
+    nn_save_dir = f"{nn_load_directory}/batch_offline_RL/{experiment_name}" 
+    os.makedirs(f"{nn_save_dir}/policies")
+    os.makedirs(f"{nn_save_dir}/constraints")
 
     print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
 
@@ -549,5 +568,6 @@ if __name__ == "__main__":
                                                                 agents, 
                                                                 dataset, 
                                                                 args, 
+                                                                nn_save_dir,
                                                                 constraint="queue")
 
