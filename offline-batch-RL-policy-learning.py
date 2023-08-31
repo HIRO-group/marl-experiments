@@ -370,7 +370,10 @@ def FittedQEvaluation(observation_spaces:dict,
                 # NOTE That this is the only thing different between FQE and FQI
                 with torch.no_grad():
                     # Calculate Q(s',pi(s'))
-                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent))
+                    # print(f"target_network[agent].forward(s_next_obses).size() {target_network[agent].forward(s_next_obses).size()}")
+                    # print(f"actions_for_agent.size() {actions_for_agent.size()}")
+                    # print(f"actions_for_agent: {actions_for_agent}")
+                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent.view(-1,1)))
 
                     # Calculate the full TD target 
                     # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
