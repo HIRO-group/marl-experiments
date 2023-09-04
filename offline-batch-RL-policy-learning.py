@@ -64,7 +64,7 @@ def CalculateMaxSpeedOverage(max_speed:float, speed_limit:float) -> float:
 
 
 def GenerateDataset(env: sumo_rl.parallel_env, 
-                    q_network: Actor, 
+                    q_network: dict, 
                     optimal_action_ratio:float = 0.8, 
                     num_episodes:int=100, 
                     episode_steps=1000) -> Dataset:
@@ -78,7 +78,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     :param episode_steps: number of steps to take in each episode
     :returns a dictionary that maps each agent to 
     """
-    print(">> Generating dataset")
+    print(" >> Generating dataset")
     start_time = datetime.now()
 
     DATASET_SIZE = num_episodes*episode_steps
@@ -98,7 +98,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
     for episode in range(num_episodes):
         if (episode % 100 == 0):
-            print(f">>> Generating Episode: {episode}")
+            print(f" >>> Generating Episode: {episode}")
 
         # Reset the environment
         obses, _ = env.reset()
@@ -129,18 +129,18 @@ def GenerateDataset(env: sumo_rl.parallel_env,
                  dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
 
     stop_time = datetime.now()
-    print(">> Dataset generation complete")
-    print(">>> Total execution time: {}".format(stop_time-start_time))
+    print(" >> Dataset generation complete")
+    print(" >> Total execution time: {}".format(stop_time-start_time))
 
     env.close()
 
     return dataset
 
 
-def OfflineBatchRL(observation_spaces:dict,
-                    action_spaces:dict,
-                    agents:list,
+def OfflineBatchRL(env:sumo_rl.parallel_env,
                     dataset: dict,
+                    dataset_policy: dict,
+                    perform_rollout_comparisons:bool,
                     config_args,
                     nn_save_dir:str,
                     csv_save_dir:str,
@@ -175,13 +175,29 @@ def OfflineBatchRL(observation_spaces:dict,
         print(f">> Constraint '{constraint}' recognized!")
 
     # TODO: could make these configs
-    MAX_NUM_ROUNDS = 2
+    MAX_NUM_ROUNDS = 10
     # OMEGA = 0.1   # TODO: we don't know what this should be yet
+
+    agents = env.possible_agents
+    action_spaces = env.action_spaces
+    observation_spaces = env.observation_spaces
 
     # Initialize csv directory
     with open(f"{csv_save_dir}/batch_offline_RL_expectation_diffs.csv", "w", newline="") as csvfile:
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['omega', 'round'])
         csv_writer.writeheader()
+
+    # Create csv files if we plan to compare the learned policy to the dataset policy each round
+    # Note that the csv are structured like g1_agent1, g1_agent2, ... , g2_agent1, g2_agent2, ..., total_system_rwd, round
+    if perform_rollout_comparisons:
+        with open(f"{csv_save_dir}/rollout_comparisons_pi_d .csv", "w", newline="") as csvfile: 
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
+            csv_writer.writeheader()
+        
+        with open(f"{csv_save_dir}/rollout_comparisons_pi_t.csv", "w", newline="") as csvfile:
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
+            csv_writer.writeheader()
+
 
     # Initialize EnsembleWeightedNetwork objects for calculating the expectations each round
     # ensemble_pi_network = EnsembleWeightedNetwork(len(agents)) 
@@ -204,7 +220,6 @@ def OfflineBatchRL(observation_spaces:dict,
         # TODO: save the policy here and add ability to load?
         # Save the policy every round
         for a in agents:
-            print(f" >>> Pi state dict: {policies[a].state_dict()}")
             torch.save(policies[a].state_dict(), f"{nn_save_dir}/policies/policy_{t}-{a}.pt")
 
         # Evaluate G_2^pi 
@@ -218,7 +233,6 @@ def OfflineBatchRL(observation_spaces:dict,
                                     constraint=constraint)
         # Save the value function every round
         for a in agents:
-            print(f" >>> G2 state dict: {G2_pi[a].state_dict()}")
             torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/constraint_{t}-{a}.pt")        
         
         # Update the ensembles for each agent by adding the latest policy and g2 value function from this round
@@ -257,6 +271,24 @@ def OfflineBatchRL(observation_spaces:dict,
             csv_writer.writerow({**omega_dict, **{'omega': omega, 'round': t}})
 
 
+        # At the end of each round, compare the latest policy to the one that was used to generate the dataset
+        if perform_rollout_comparisons:
+            print(f" >> Performing rollout comparison between learned policy and dataset policy")
+            episode_rewards_pi_d, episode_constraint_1_pi_d, episode_constraint_2_pi_d = PerformRollout(env, dataset_policy, config_args)
+            system_episode_reward_pi_d = sum(list(episode_rewards_pi_d.values())) # Accumulated reward of all agents
+
+            episode_rewards_pi_t, episode_constraint_1_pi_t, episode_constraint_2_pi_t = PerformRollout(env, policies, config_args)
+            system_episode_reward_pi_t = sum(list(episode_rewards_pi_t.values())) # Accumulated reward of all agents
+            
+            with open(f"{csv_save_dir}/rollout_comparisons_pi_d .csv", "a", newline="") as csvfile: 
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
+                csv_writer.writerow({**episode_constraint_1_pi_d, **episode_constraint_2_pi_d, **{'system_episode_reward' : system_episode_reward_pi_d, 'round' : t}})
+            
+            with open(f"{csv_save_dir}/rollout_comparisons_pi_t.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
+                csv_writer.writerow({**episode_constraint_1_pi_t, **episode_constraint_2_pi_t, **{'system_episode_reward' : system_episode_reward_pi_t, 'round' : t}})
+
+
         round_completeion_time = datetime.now()
         print(f" >> Round {t} complete!")
         print(f" >> Evaluated Omega: {omega}")
@@ -290,7 +322,7 @@ def FittedQIteration(observation_spaces:dict,
     """
 
 
-    print(">> Beginning Fitted Q Iteration")
+    print(" >> Beginning Fitted Q Iteration")
     start_time = datetime.now()
 
     q_network = {}          # Dictionary for storing q-networks (maps agent to a q-network)
@@ -377,8 +409,8 @@ def FittedQIteration(observation_spaces:dict,
                     target_network[agent].load_state_dict(q_network[agent].state_dict())
 
     stop_time = datetime.now()
-    print(">> Fitted Q Iteration complete")
-    print(">>> Total execution time: {}".format(stop_time-start_time))
+    print(" >> Fitted Q Iteration complete")
+    print(" >>> Total execution time: {}".format(stop_time-start_time))
     
     return actor_network
 
@@ -450,7 +482,7 @@ def FittedQEvaluation(observation_spaces:dict,
                 with torch.no_grad():
                     
                     # Calculate Q(s',pi(s'))
-                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent).view(-1,1)).squeeze()  # Size 32,1 
+                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent).view(-1,1)).squeeze().to(device)  # Size 32,1 
                     # Calculate the full TD target 
                     # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
@@ -530,9 +562,10 @@ def EvaluatePolicyEnsemble(agent_ensembles:dict,
 
     # Calculate the expected value for each agent's policy using each agent's ensemble
     for agent in agents:
+        # TODO: take mean here?
         agent_policy_outputs = policy_outputs_ensemble[agent]
         
-        print(f" >> agent: {agent} latest policy outputs: {agent_policy_outputs}")
+        # print(f" >> agent: {agent} latest policy outputs: {agent_policy_outputs}")
 
         # Un-normalized sum
         cummulative_value = torch.zeros_like(agent_policy_outputs[0])
@@ -573,7 +606,7 @@ def EvaluateConstraintEnsemble(agent_ensembles:dict,
     :param config_args: Config arguments used to set up the experiment
     :returns a Dictionary that maps each agent to its expectation E_t[g] = 1/t*(g_t + (t-1)*E_t-1[g])
     """
-    print(f"> Evaluating Constraint Expected Value")
+    print(f" > Evaluating Constraint Expected Value")
 
     agents = agent_ensembles.keys()
 
@@ -621,9 +654,81 @@ def EvaluateConstraintEnsemble(agent_ensembles:dict,
         # according to using the ensemble of collected constraint value functions
         expected_values_ensemble[agent] = torch.mean(expected_value, dim=0)
 
-    print(f"> Evaluation of constraint expected value complete")
+    print(f" > Evaluation of constraint expected value complete")
 
     return expected_values_ensemble
+
+
+def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, dict, dict):
+    """
+    Perform a 1-episode rollout of a provided policy to evaluate the constraint functions g1 and g2. 
+    This function assumes that the environment has been set up with the 'queue' reward function when evaluating the
+    g1 and g2 constraints.
+
+    :param env: The environment to execute the policy in
+    :param policy: Dictionary that maps agents to "actor" models
+    :param config_args: Configuration arguments used to set up the experiment
+    :returns: Three dictionaries, the first dict maps agents to their accumulated reward for the episode, 
+            the second dict maps agents to their accumulated g1 constraint for the episode, the third dict
+            maps agents to their accumulated g2 constraint for the episode
+    """
+    # TODO: update function to support global observations
+    
+    # Define the speed overage threshold used to evaluate the g1 constraint 
+    # (note this needs to match what is used in GenerateDataset)
+    SPEED_OVERAGE_THRESHOLD = 13.89
+
+    # This function assumes that the environment is set up with the 'queue' reward so if that's not the case
+    # we need to return an error
+    if (config_args.sumo_reward != 'queue'):
+        print(f"ERROR: Cannot evaluate constraints while performing rollout with environment configured with '{config_args.sumo_reward}'")
+        return {}, {}, {}
+
+    # Define empty dictionary that maps agents to actions
+    actions = {agent: None for agent in agents}
+
+    # Dictionary that maps the each agent to its cumulative reward each episode
+    episode_rewards = {agent: 0 for agent in agents}            
+
+    # Maps each agent to its MAX SPEED OVERAGE for this step        
+    episode_constraint_1 = {agent : 0 for agent in agents}  
+    
+    # Maps each agent to the accumulated NUBMER OF CARS STOPPED for episode
+    episode_constraint_2 = {agent : 0 for agent in agents}  
+
+    # Initialize the env
+    obses, _ = env.reset()
+
+    # Perform the rollout
+    for sumo_step in range(config_args.sumo_seconds):
+        # Populate the action dictionary
+        for agent in agents:
+            # Only use optimal actions according to the policy
+            action, _, _ = policy[agent].get_action(obses[agent])
+            actions[agent] = action.detach().cpu().numpy()
+
+        # Apply all actions to the env
+        next_obses, rewards, dones, truncated, info = env.step(actions)
+
+
+        # Accumulate the total episode reward and max speeds
+        for agent in agents:
+            # At the end of a simulation, next_obses is an empty dictionary so don't log it
+            try:
+                episode_rewards[agent] += rewards[agent]
+                max_speed_observed_by_agent = next_obses[agent][-1]
+                episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
+                episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
+
+            except:
+                continue
+                
+            obses = next_obses
+        
+        if np.prod(list(dones.values())):
+            return episode_rewards, episode_constraint_1, episode_constraint_2
+        
+    return episode_rewards, episode_constraint_1, episode_constraint_2
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------
@@ -771,10 +876,11 @@ if __name__ == "__main__":
         Use the generated dataset to iteratively learn a new policy 
         Essentially we want to evaluate the new policy, E[pi] and the constraint function E[G]
     """
-    policy_expectation, constraint_expectation = OfflineBatchRL(observation_spaces,
-                                                                action_spaces,
-                                                                agents, 
+    perform_rollout_comparisons = True
+    policy_expectation, constraint_expectation = OfflineBatchRL(env,
                                                                 dataset, 
+                                                                q_network,
+                                                                perform_rollout_comparisons,
                                                                 args, 
                                                                 nn_save_dir,
                                                                 csv_save_dir,
