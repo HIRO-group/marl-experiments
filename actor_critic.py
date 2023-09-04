@@ -6,8 +6,10 @@ from torch.distributions.categorical import Categorical
 
 import numpy as np
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+# TODO: fix cuda...
+# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = 'cpu'
+# print(f">>>> DEVICE: {device}")
 
 # TODO: use this file across all MARL experiment files
 class QNetwork(nn.Module):
@@ -37,12 +39,17 @@ class Actor(nn.Module):
         self.fc3 = nn.Linear(hidden_size, action_space_dim)
 
     def forward(self, x):
+        # print(f">>> forward device: {device}")
+        # x = torch.Tensor(x).to(device)
+        # print(f">>> X device: {x.device}")
+
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         logits = self.fc3(x)
         return logits
     
     def get_action(self, x):
+        # print(f">>> get_action device: {device}")
         x = torch.Tensor(x).to(device)
         logits = self.forward(x)
         # Note that this is equivalent to what used to be called multinomial 

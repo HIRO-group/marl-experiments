@@ -19,6 +19,7 @@ import torch.optim as optim
 import numpy as np
 from datetime import datetime
 import random
+import csv
 
 # SUMO dependencies
 import sumo_rl
@@ -33,7 +34,8 @@ from MARLConfigParser import MARLConfigParser
 # Custom modules 
 from actor_critic import Actor, QNetwork, one_hot_q_values
 from dataset import Dataset
-from linear_schedule import LinearSchedule
+# from linear_schedule import LinearSchedule
+# from ensemble_weighted_network import EnsembleWeightedNetwork
 
 
 # Set up the system and environement
@@ -96,7 +98,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
     for episode in range(num_episodes):
         if (episode % 100 == 0):
-            print(f">>> Episode: {episode}")
+            print(f">>> Generating Episode: {episode}")
 
         # Reset the environment
         obses, _ = env.reset()
@@ -129,19 +131,41 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     stop_time = datetime.now()
     print(">> Dataset generation complete")
     print(">>> Total execution time: {}".format(stop_time-start_time))
+
+    env.close()
+
     return dataset
 
 
 def OfflineBatchRL(observation_spaces:dict,
-                   action_spaces:dict,
-                   agents:list,
-                   dataset: dict,
-                   config_args,
-                nn_save_dir:str,
-                   constraint:str="") -> (dict, dict):
+                    action_spaces:dict,
+                    agents:list,
+                    dataset: dict,
+                    config_args,
+                    nn_save_dir:str,
+                    csv_save_dir:str,
+                    constraint:str="") -> (dict, dict):
 
-    print(f"> Performing batch offline reinforcement learning")
-    start_time = datetime.now()
+    """
+    Perform offline batch reinforcement learning
+    Here we use a provided dataset to learn and evaluate a policy for a given number of "rounds"
+    Each round, a policy is learned and then evaluated (each of which involves solving an RL problem). 
+    The provided constraint function defines how the "target" is calculated for each RL problem. At the end of the 
+    round, the expected value of the polciy and the value function is calculated.
+
+    :param observation_spaces: Dictionary that maps an agent to the observation space dimensions
+    :param action_spaces: Dictionary that maps agent to its action space
+    :param agents: List of agent names
+    :param dataset: Dictionary that maps each agent to its experience tuple
+    :param config_args: Configuration arguments used to set up the experiment
+    :param nn_save_dir: Directory in which to save the models each round
+    :pram csv_save_dir: Directory in which to save the csv file 
+    :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the policy
+    :returns A dictionary that maps each agent to its learned policy
+    """
+
+    print(f" > Performing batch offline reinforcement learning")
+    function_start_time = datetime.now()
 
     # Check inputs
     if not ((constraint == "queue") or (constraint == "speed_overage")):
@@ -152,13 +176,25 @@ def OfflineBatchRL(observation_spaces:dict,
 
     # TODO: could make these configs
     MAX_NUM_ROUNDS = 2
-    OMEGA = 0.1
-    expectation_G2_prev = 0 # TODO: Initialize randomly
+    # OMEGA = 0.1   # TODO: we don't know what this should be yet
+
+    # Initialize csv directory
+    with open(f"{csv_save_dir}/batch_offline_RL_expectation_diffs.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['omega', 'round'])
+        csv_writer.writeheader()
+
+    # Initialize EnsembleWeightedNetwork objects for calculating the expectations each round
+    # ensemble_pi_network = EnsembleWeightedNetwork(len(agents)) 
+    # ensemble_g2_network = EnsembleWeightedNetwork(len(agents))
+    agents_ensemble_pi = {agent : [] for agent in agents}   # Dictionary mapping agents to list of their learned policies each round
+    agents_ensemble_g2 = {agent : [] for agent in agents}   # Dictionary mapping agents to their learned constraint value functions each round
 
     for t in range(MAX_NUM_ROUNDS):
-        print(f">> BEGINNING ROUND: {t}")
+        print(f" >> BEGINNING ROUND: {t}")
+        round_start_time = datetime.now()
         # Learn a policy that optimizes actions for the "g2" constraint
         # This is essentially the "actor", policies here are represented as probability density functions of taking an action given a state
+        # policies_name = f"policies_{t}"
         policies = FittedQIteration(observation_spaces, 
                                     action_spaces, 
                                     agents, 
@@ -168,8 +204,9 @@ def OfflineBatchRL(observation_spaces:dict,
         # TODO: save the policy here and add ability to load?
         # Save the policy every round
         for a in agents:
-            torch.save(policies[a].state_dict(), f"{nn_save_dir}/policies/policy_{t}-{agent}.pt")
-        
+            print(f" >>> Pi state dict: {policies[a].state_dict()}")
+            torch.save(policies[a].state_dict(), f"{nn_save_dir}/policies/policy_{t}-{a}.pt")
+
         # Evaluate G_2^pi 
         # This is essentially the "critic"
         G2_pi = FittedQEvaluation(observation_spaces, 
@@ -181,29 +218,55 @@ def OfflineBatchRL(observation_spaces:dict,
                                     constraint=constraint)
         # Save the value function every round
         for a in agents:
-            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/constraint_{t}-{agent}.pt")        
+            print(f" >>> G2 state dict: {G2_pi[a].state_dict()}")
+            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/constraint_{t}-{a}.pt")        
         
+        # Update the ensembles for each agent by adding the latest policy and g2 value function from this round
+        for agent in agents:
+            agent_latest_policy = policies[agent]
+            agents_ensemble_pi[agent].append(agent_latest_policy)
 
-        # Update expectation for pi
-        expectation_pi = 1/t * (policies + ((t-1)*expectation_pi))    # TODO: review this step
+            agent_latest_g2 = G2_pi[agent]
+            agents_ensemble_g2[agent].append(agent_latest_g2)
 
-        # Update expectation for G2
-        expectation_G2 = 1/t * (G2_pi + ((t-1)*expectation_G2_prev)) # TODO: review this step
+        # Calculate 1/t*(pi + t-1(E[pi])) for each agent
+        expectation_pi = EvaluatePolicyEnsemble(agents_ensemble_pi, dataset, config_args) # TODO: could we replace this with a rollout?
 
-        # Check exit condition
-        if (np.linalg.norm(expectation_G2 - expectation_G2_prev)**2 <= OMEGA):
-            break
+        # Calculate 1/t*(g2 + t-1(E[g2])) for each agent
+        expectation_g2 = EvaluateConstraintEnsemble(agents_ensemble_g2, dataset, config_args) # TODO: could we replace this with a rollout?
+
+        # for agent in agents:
+        #     print(f" >>> Agent '{agent}'")
+        #     print(f" >>>> E[pi]: {expectation_pi[agent]}")
+        #     print(f" >>>> E[g2]: {expectation_g2[agent]}")
+
+        # Evaluate difference but don't use it for an exit condition (yet) because we don't know what 
+        # OMEGA should be set to
+        # Note that we are calculating omega for each agent first then taking the norm of the "vector" of omegas
+        omega_dict = {}
+        for agent in agents:
+            agent_omega = torch.linalg.vector_norm(expectation_pi[agent] - expectation_g2[agent])
+            omega_dict[agent] = agent_omega.item()  # Store the values as floats in the dict
+
+        # Convert the omega_dict values to list then to a tensor and then take the norm of it
+        omega = torch.linalg.vector_norm(torch.tensor(list(omega_dict.values()))).item()
+
+        # Log the data from this round
+        with open(f"{csv_save_dir}/batch_offline_RL_expectation_diffs.csv", "a", newline="") as csvfile:    
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['omega', 'round'])                        
+            csv_writer.writerow({**omega_dict, **{'omega': omega, 'round': t}})
+
 
         round_completeion_time = datetime.now()
-        print(f">>> Round {t} complete!")
-        print(f">>> Total execution time: {round_completeion_time-start_time}")
+        print(f" >> Round {t} complete!")
+        print(f" >> Evaluated Omega: {omega}")
+        print(f" >> Round execution time: {round_completeion_time-round_start_time}")
 
-    stop_time = datetime.now()
-    print(f"> Batch offline reinforcement learning")
-    print(f">> Total execution time: {stop_time-start_time}")
+    function_stop_time = datetime.now()
+    print(f" > Batch offline reinforcement learning complete")
+    print(f" > Total execution time: {function_stop_time-function_start_time}")
 
-
-    return expectation_pi, expectation_G2
+    return expectation_pi, expectation_g2
 
 
 def FittedQIteration(observation_spaces:dict,
@@ -217,11 +280,13 @@ def FittedQIteration(observation_spaces:dict,
     Note that this implementation utilizes an "actor-critic" approach to solve the RL problem
     (algorithm 4 from Le, et. al)
 
-    :param observation_spaces:
-    :param action_spaces:
-    :param agents:
-    :param dataset:
-    :param constraint:
+    :param observation_spaces: Dictionary that maps an agent to the observation space dimensions
+    :param action_spaces: Dictionary that maps agent to its action space
+    :param agents: List of agent names
+    :param dataset: Dictionary that maps each agent to its experience tuple
+    :param config_args: Configuration arguments used to set up the experiment
+    :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the policy
+    :returns A dictionary that maps each agent to its learned policy
     """
 
 
@@ -257,11 +322,12 @@ def FittedQIteration(observation_spaces:dict,
         # Training for each agent
         for agent in agents:
 
+            # TODO: start learning immediately? there's no need to delay
             if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
                 
                 # Sample data from the dataset
                 s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
-                
+                # print(f"s_obses {s_obses}, s_actions {s_actions}, s_next_obses {s_next_obses}, s_g1s {s_g1s}, s_g2s {s_g2s}, s_dones {s_dones}")
                 # Compute the target
                 with torch.no_grad():
                     # Calculate min_a Q(s',a)
@@ -326,20 +392,21 @@ def FittedQEvaluation(observation_spaces:dict,
                      constraint:str="") -> dict:
     """
     Implementation of Fitted Off-Policy Evaluation with function approximation for offline evaluation 
-    of a policy
+    of a policy according to a provided constraint
     (algorithm 3 from Le, et. al)
 
-    :param observation_spaces:
-    :param action_spaces:
-    :param agents:
-    :param policy:
-    :param dataset:
-    :param config_args:
-    :param constraint:
+    :param observation_spaces: Dictionary that maps an agent to the observation space dimensions
+    :param action_spaces: Dictionary that maps agent to its action space
+    :param agents: List of agent names
+    :param policy: Dictionary that maps an agent to its policy to be evaluated
+    :param dataset: Dictionary that maps each agent to its experience tuple
+    :param config_args: Configuration arguments used to set up the experiment
+    :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the value function
+    :returns A dictionary that maps each agent to its learned constraint value function
     """
 
 
-    print(">> Beginning Fitted Q Evaluation")
+    print(" >> Beginning Fitted Q Evaluation")
     start_time = datetime.now()
 
     q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
@@ -367,7 +434,8 @@ def FittedQEvaluation(observation_spaces:dict,
 
         # Training for each agent
         for agent in agents:
-
+            
+            # TODO: start learning immediately? there's no need to delay
             if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
                 
                 # Sample data from the dataset
@@ -380,12 +448,9 @@ def FittedQEvaluation(observation_spaces:dict,
                 # Compute the target
                 # NOTE That this is the only thing different between FQE and FQI
                 with torch.no_grad():
+                    
                     # Calculate Q(s',pi(s'))
-                    # print(f"target_network[agent].forward(s_next_obses).size() {target_network[agent].forward(s_next_obses).size()}")
-                    # print(f"actions_for_agent.size() {actions_for_agent.size()}")
-                    # print(f"actions_for_agent: {actions_for_agent}")
-                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent.view(-1,1))).squeeze()
-
+                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent).view(-1,1)).squeeze()  # Size 32,1 
                     # Calculate the full TD target 
                     # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
@@ -403,6 +468,13 @@ def FittedQEvaluation(observation_spaces:dict,
                 # TODO: when calculating the "old value" should s_actions be used here? or should actions_for_agent? (i.e. should they come from
                 # experience tuple or policy)
                 old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+
+                # print(f"target_network[agent].forward(s_next_obses) size: {target_network[agent].forward(s_next_obses).size()}")    # 32, 4
+                # print(f"actions_for_agent size: {actions_for_agent.size()}")    # 32
+                # print(f"target size: {target.size()}")  # 32, 1
+                # print(f"td_target size: {td_target.size()}")    # 32, 32 (needs to be 32)
+                # print(f"old_val size: {old_val.size()}")    # 32
+
                 loss = loss_fn(td_target, old_val)
 
                 # optimize the model
@@ -416,10 +488,142 @@ def FittedQEvaluation(observation_spaces:dict,
                     target_network[agent].load_state_dict(q_network[agent].state_dict())
 
     stop_time = datetime.now()
-    print(">> Fitted Q Evaluation complete")
-    print(">>> Total execution time: {}".format(stop_time-start_time))
+    print(" >> Fitted Q Evaluation complete")
+    print(" >>> Total execution time: {}".format(stop_time-start_time))
     
     return q_network
+
+
+def EvaluatePolicyEnsemble(agent_ensembles:dict,
+                            dataset:dict,
+                            config_args) -> dict:
+    """
+    Each agent has a collection (i.e. "ensemble" of policies), in this function, we calculate the 
+    expected value of the latest policy using the expected value of the previous policies.
+
+    :param agent_ensembles: Dictionary that maps agents to lists of policies. The last policy in the list is the most
+            recent policy
+    :param dataset: Dictionary that maps agents to a collection of experience tuples
+    :param config_args: Config arguments used to set up the experiment
+    :returns a Dictionary that maps each agent to its expectation E_t[pi] = 1/t*(pi_t + (t-1)*E_t-1[pi])
+    """
+
+    print(f" > Evaluating Policy Expected Value")
+
+    agents = agent_ensembles.keys()
+
+    # Calculate policy outputs for each agent and each of its policy networks in the ensemble
+    policy_outputs_ensemble = {agent : [] for agent in agents}
+    expected_values_ensemble = {agent : [] for agent in agents}
+
+    for agent in agents:
+        
+        agent_policy_outputs = []
+        
+        for policy in agent_ensembles[agent]:
+            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_done = dataset[agent].sample(config_args.batch_size)
+            action, log_prob, action_probs = policy.get_action(s_next_obses)    # TODO: do we use s_obses or s_next_obses here?
+            
+            agent_policy_outputs.append(action_probs)
+
+        policy_outputs_ensemble[agent] = agent_policy_outputs
+
+    # Calculate the expected value for each agent's policy using each agent's ensemble
+    for agent in agents:
+        agent_policy_outputs = policy_outputs_ensemble[agent]
+        
+        print(f" >> agent: {agent} latest policy outputs: {agent_policy_outputs}")
+
+        # Un-normalized sum
+        cummulative_value = torch.zeros_like(agent_policy_outputs[0])
+        
+        # The number of policies (t) this agent has in the ensemble 
+        num_policies = len(agent_policy_outputs)
+
+        # Get the policy output of this agent's latest policy in the ensemble (pi_t)
+        agent_latest_policy_output = policy_outputs_ensemble[agent][-1]
+
+        for policy_output in agent_policy_outputs:
+            cummulative_value += policy_output
+        
+        # Calculate 1/t*(pi + t-1(E[pi])) for this agent
+        # TODO: we could also add weights to each policy in the agent's ensemble
+        expected_value = 1/num_policies*(agent_latest_policy_output + (num_policies - 1)*cummulative_value)
+
+        # The resulting expected_values_ensemble is a dictionary that maps each agent to be a tensor, 
+        # where each tensor represents the expected action probabilities for that agent's policy 
+        # according to using the ensemble of collected policies
+        expected_values_ensemble[agent] = torch.mean(expected_value, dim=0)
+
+    print(f" > Evaluation of policy expected value complete")
+
+    return expected_values_ensemble
+
+
+def EvaluateConstraintEnsemble(agent_ensembles:dict,
+                            dataset:dict,
+                            config_args) -> dict:
+    """
+    Each agent has a collection (i.e. "ensemble") of constraint value functions, in this function, we calculate the 
+    expected value of the latest constraint value function using the expected value of the previous policies.
+
+    :param agent_ensembles: Dictionary that maps agents to lists of policies. The last policy in the list is the most
+            recent policy
+    :param dataset: Dictionary that maps agents to a collection of experience tuples
+    :param config_args: Config arguments used to set up the experiment
+    :returns a Dictionary that maps each agent to its expectation E_t[g] = 1/t*(g_t + (t-1)*E_t-1[g])
+    """
+    print(f"> Evaluating Constraint Expected Value")
+
+    agents = agent_ensembles.keys()
+
+    # Calculate constraint value function outputs for each agent and each of its policy networks in the ensemble
+    constraint_outputs_ensemble = {agent : [] for agent in agents}
+    expected_values_ensemble = {agent : [] for agent in agents}
+
+    for agent in agents:
+        
+        agent_constraint_outputs = []
+        
+        for constraint_function in agent_ensembles[agent]:
+            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_done = dataset[agent].sample(config_args.batch_size)
+            # TODO: this is the only line that is different from EvaluatePolicyEnsemble so these functions
+            # should probbably be combined
+            action_values = constraint_function.forward(s_obses)    
+            
+            agent_constraint_outputs.append(action_values)
+
+        constraint_outputs_ensemble[agent] = agent_constraint_outputs
+
+
+    # Calculate the expected value for each agent's constraint value function using each agent's ensemble
+    for agent in agents:
+        agent_constraint_outputs = constraint_outputs_ensemble[agent]
+        
+        # Un-normalized sum
+        cummulative_value = torch.zeros_like(agent_constraint_outputs[0])
+        
+        # The number of policies (t) this agent has in the ensemble 
+        num_policies = len(agent_constraint_outputs)
+
+        # Get the policy output of this agent's latest policy in the ensemble (pi_t)
+        agent_latest_constraint_output = constraint_outputs_ensemble[agent][-1]
+
+        for constraint_output in agent_constraint_outputs:
+            cummulative_value += constraint_output
+        
+        # Calculate 1/t*(g + t-1(E[g]))
+        # TODO: we could also add weights to each policy in the agent's ensemble
+        expected_value = 1/num_policies*(agent_latest_constraint_output + (num_policies - 1)*cummulative_value)
+
+        # The resulting expected_values_ensemble is a dictionary that maps each agent to be a tensor, 
+        # where each tensor represents the expected action values for that agent's constraint value function 
+        # according to using the ensemble of collected constraint value functions
+        expected_values_ensemble[agent] = torch.mean(expected_value, dim=0)
+
+    print(f"> Evaluation of constraint expected value complete")
+
+    return expected_values_ensemble
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------
@@ -432,8 +636,10 @@ if __name__ == "__main__":
     if not args.seed:
         args.seed = int(datetime.now()) 
 
-    device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
-
+    # TODO: fix cuda...
+    # device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
+    device = 'cpu'
+    print(f"DEVICE: {device}")
     analysis_steps = args.analysis_steps                    # Defines which checkpoint will be loaded into the Q model
     parameter_sharing_model = args.parameter_sharing_model  # Flag indicating if we're loading a model from DQN with PS
     nn_load_directory = args.nn_directory 
@@ -443,9 +649,11 @@ if __name__ == "__main__":
     # generate the dataset
     experiment_time = str(datetime.now()).split('.')[0].replace(':','-')   
     experiment_name = "{}__N{}__exp{}__seed{}__{}".format(args.gym_id, args.N, args.exp_name, args.seed, experiment_time)
-    nn_save_dir = f"{nn_load_directory}/batch_offline_RL/{experiment_name}" 
+    nn_save_dir = f"{nn_load_directory}/batch_offline_RL/{experiment_name}"
+    csv_save_dir = f"{nn_save_dir}/csv" 
     os.makedirs(f"{nn_save_dir}/policies")
     os.makedirs(f"{nn_save_dir}/constraints")
+    os.makedirs(csv_save_dir)
 
     print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
 
@@ -531,7 +739,7 @@ if __name__ == "__main__":
 
             nn_file = "{}/{}-{}.pt".format(nn_dir, analysis_steps, agent) 
             q_network[agent].load_state_dict(torch.load(nn_file))
-            print("> Loading NN from file: {} for dataset generation".format(nn_file))
+            print(" > Loading NN from file: {} for dataset generation".format(nn_file))
 
     # Seed the env
     env.reset(seed=args.seed)
@@ -560,7 +768,7 @@ if __name__ == "__main__":
 
     """
     Step 2:
-        Use the generated dataset to learn a new policy 
+        Use the generated dataset to iteratively learn a new policy 
         Essentially we want to evaluate the new policy, E[pi] and the constraint function E[G]
     """
     policy_expectation, constraint_expectation = OfflineBatchRL(observation_spaces,
@@ -569,5 +777,6 @@ if __name__ == "__main__":
                                                                 dataset, 
                                                                 args, 
                                                                 nn_save_dir,
+                                                                csv_save_dir,
                                                                 constraint="queue")
 
