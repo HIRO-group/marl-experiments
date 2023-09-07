@@ -52,13 +52,13 @@ def CalculateMaxSpeedOverage(max_speed:float, speed_limit:float) -> float:
     Calculate how much the agents' max speeds exceeded some speed limit
     :param max_speed: Max speed of all cars observed by the agent (assumed at a single step)
     :param speed_limit: User defined threshold over which the overage is calculated
-    :returns How much the max speed exceeded the speed limit
+    :returns -1 times how much the max speed exceeded the speed limit
     """
 
     overage = 0.0
 
-    if max_speed > speed_limit:
-        overage = max_speed - speed_limit
+    if (max_speed > speed_limit):
+        overage = -1.0*(max_speed - speed_limit)
 
     return overage
 
@@ -67,7 +67,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
                     q_network: dict, 
                     optimal_action_ratio:float = 0.8, 
                     num_episodes:int=100, 
-                    episode_steps=1000) -> Dataset:
+                    episode_steps=1000) -> dict:
     """
     :param env: The sumo environment
     :param q_netowrk: The trained neural network used to generate the dataset by acting in the environment
@@ -93,12 +93,11 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     action_spaces = env.action_spaces
 
     # Define dictionaries to hold the values of the constraints (g1 and g2) each step
-    constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its MAX SPEED OVERAGE for this step
-    constraint_2 = {agent : 0 for agent in agents}  # Maps each agent to the NUBMER OF CARS STOPPED for this step
+    constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its (-1) * MAX SPEED OVERAGE for this step
+    constraint_2 = {agent : 0 for agent in agents}  # Maps each agent to the (-1) * NUBMER OF CARS STOPPED for this step
 
     for episode in range(num_episodes):
-        if (episode % 100 == 0):
-            print(f" >>> Generating Episode: {episode}")
+        print(f" >>> Generating Episode: {episode}")
 
         # Reset the environment
         obses, _ = env.reset()
@@ -107,7 +106,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
             # Set the action for each agent
             for agent in agents:
-                if random.random() < (1-optimal_action_ratio):
+                if (random.random() < (1-optimal_action_ratio)):
                     actions[agent] = action_spaces[agent].sample()
                 else:
                     # Actor choses the actions
@@ -127,6 +126,8 @@ def GenerateDataset(env: sumo_rl.parallel_env,
                  constraint_1[agent] = CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
                  constraint_2[agent] = rewards[agent]
                  dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
+
+            obses = next_obses
 
     stop_time = datetime.now()
     print(" >> Dataset generation complete")
@@ -182,26 +183,44 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     action_spaces = env.action_spaces
     observation_spaces = env.observation_spaces
 
-    # Initialize csv directory
-    with open(f"{csv_save_dir}/batch_offline_RL_expectation_diffs.csv", "w", newline="") as csvfile:
+    # Initialize csv files
+    with open(f"{csv_save_dir}/batch_offline_RL_expectation_pi.csv", "w", newline="") as csvfile:
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['omega', 'round'])
         csv_writer.writeheader()
 
+    with open(f"{csv_save_dir}/batch_offline_RL_expectation_g.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['omega', 'round'])
+        csv_writer.writeheader()
+
+    with open(f"{csv_save_dir}/FQE_loss.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample','global_step'])
+        csv_writer.writeheader()
+
+    with open(f"{csv_save_dir}/FQI_actor_loss.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
+        csv_writer.writeheader()
+
     # Create csv files if we plan to compare the learned policy to the dataset policy each round
-    # Note that the csv are structured like g1_agent1, g1_agent2, ... , g2_agent1, g2_agent2, ..., total_system_rwd, round
+    # Each round, we will store the return for both constraints for the learned policy and the dataset policy
     if perform_rollout_comparisons:
-        with open(f"{csv_save_dir}/rollout_comparisons_pi_d .csv", "w", newline="") as csvfile: 
-            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
+        with open(f"{csv_save_dir}/rollout_pi_d_constraint_1.csv", "w", newline="") as csvfile:
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
             csv_writer.writeheader()
-        
-        with open(f"{csv_save_dir}/rollout_comparisons_pi_t.csv", "w", newline="") as csvfile:
-            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
+
+        with open(f"{csv_save_dir}/rollout_pi_d_constraint_2.csv", "w", newline="") as csvfile: 
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
+            csv_writer.writeheader()
+
+        with open(f"{csv_save_dir}/rollout_pi_t_constraint_1.csv", "w", newline="") as csvfile:
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
+            csv_writer.writeheader()
+
+        with open(f"{csv_save_dir}/rollout_pi_t_constraint_2.csv", "w", newline="") as csvfile: 
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
             csv_writer.writeheader()
 
 
     # Initialize EnsembleWeightedNetwork objects for calculating the expectations each round
-    # ensemble_pi_network = EnsembleWeightedNetwork(len(agents)) 
-    # ensemble_g2_network = EnsembleWeightedNetwork(len(agents))
     agents_ensemble_pi = {agent : [] for agent in agents}   # Dictionary mapping agents to list of their learned policies each round
     agents_ensemble_g2 = {agent : [] for agent in agents}   # Dictionary mapping agents to their learned constraint value functions each round
 
@@ -213,8 +232,9 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # policies_name = f"policies_{t}"
         policies = FittedQIteration(observation_spaces, 
                                     action_spaces, 
-                                    agents, 
+                                    agents,
                                     dataset, 
+                                    csv_save_dir,
                                     config_args, 
                                     constraint=constraint) 
         # TODO: save the policy here and add ability to load?
@@ -229,6 +249,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     agents,
                                     policies,
                                     dataset, 
+                                    csv_save_dir,
                                     config_args, 
                                     constraint=constraint)
         # Save the value function every round
@@ -266,27 +287,54 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         omega = torch.linalg.vector_norm(torch.tensor(list(omega_dict.values()))).item()
 
         # Log the data from this round
-        with open(f"{csv_save_dir}/batch_offline_RL_expectation_diffs.csv", "a", newline="") as csvfile:    
+        with open(f"{csv_save_dir}/batch_offline_RL_expectation_pi.csv", "a", newline="") as csvfile:    
             csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['omega', 'round'])                        
-            csv_writer.writerow({**omega_dict, **{'omega': omega, 'round': t}})
+            csv_writer.writerow({**expectation_pi, **{'omega': omega, 'round': t}})
 
+        with open(f"{csv_save_dir}/batch_offline_RL_expectation_g.csv", "a", newline="") as csvfile:    
+            csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['omega', 'round'])                        
+            csv_writer.writerow({**expectation_g2, **{'omega': omega, 'round': t}})
 
         # At the end of each round, compare the latest policy to the one that was used to generate the dataset
         if perform_rollout_comparisons:
             print(f" >> Performing rollout comparison between learned policy and dataset policy")
+            
+            # Run the rollout on the dataset policy
             episode_rewards_pi_d, episode_constraint_1_pi_d, episode_constraint_2_pi_d = PerformRollout(env, dataset_policy, config_args)
+            
+            # Add it all up
             system_episode_reward_pi_d = sum(list(episode_rewards_pi_d.values())) # Accumulated reward of all agents
+            system_episode_constraint_1_pi_d = sum(list(episode_constraint_1_pi_d.values())) 
+            system_episode_constraint_2_pi_d = sum(list(episode_constraint_2_pi_d.values())) 
+            
+            # Log the data for the dataset policy
+            with open(f"{csv_save_dir}/rollout_pi_d_constraint_1.csv", "a", newline="") as csvfile: 
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
+                csv_writer.writerow({**episode_constraint_1_pi_d, **{'system_episode_constraint_1' : system_episode_constraint_1_pi_d, 'round' : t}})
+            
+            with open(f"{csv_save_dir}/rollout_pi_d_constraint_2.csv", "a", newline="") as csvfile: 
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
+                csv_writer.writerow({**episode_constraint_2_pi_d, **{'system_episode_constraint_2' : system_episode_constraint_2_pi_d, 'round' : t}})
 
+
+            # Run the rollout on the policy learned this round
             episode_rewards_pi_t, episode_constraint_1_pi_t, episode_constraint_2_pi_t = PerformRollout(env, policies, config_args)
+
+            # Add it all up
             system_episode_reward_pi_t = sum(list(episode_rewards_pi_t.values())) # Accumulated reward of all agents
-            
-            with open(f"{csv_save_dir}/rollout_comparisons_pi_d .csv", "a", newline="") as csvfile: 
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
-                csv_writer.writerow({**episode_constraint_1_pi_d, **episode_constraint_2_pi_d, **{'system_episode_reward' : system_episode_reward_pi_d, 'round' : t}})
-            
-            with open(f"{csv_save_dir}/rollout_comparisons_pi_t.csv", "a", newline="") as csvfile:
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + agents + ['system_episode_reward', 'round'])
-                csv_writer.writerow({**episode_constraint_1_pi_t, **episode_constraint_2_pi_t, **{'system_episode_reward' : system_episode_reward_pi_t, 'round' : t}})
+            system_episode_constraint_1_pi_t = sum(list(episode_constraint_1_pi_t.values())) 
+            system_episode_constraint_2_pi_t = sum(list(episode_constraint_2_pi_t.values())) 
+
+            with open(f"{csv_save_dir}/rollout_pi_t_constraint_1.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
+                csv_writer.writerow({**episode_constraint_1_pi_t, **{'system_episode_constraint_1' : system_episode_constraint_1_pi_t, 'round' : t}})
+
+            with open(f"{csv_save_dir}/rollout_pi_t_constraint_2.csv", "a", newline="") as csvfile: 
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
+                csv_writer.writerow({**episode_constraint_2_pi_t, **{'system_episode_constraint_2' : system_episode_constraint_2_pi_t, 'round' : t}})
+
+            # print(f" >>>>> episode_constraint_1_pi_t: {episode_constraint_1_pi_t}")
+            # print(f" >>>>> episode_constraint_2_pi_t: {episode_constraint_2_pi_t}")
 
 
         round_completeion_time = datetime.now()
@@ -305,6 +353,7 @@ def FittedQIteration(observation_spaces:dict,
                      action_spaces:dict,
                      agents:list,
                      dataset:dict, 
+                     csv_save_dir:str,
                      config_args, 
                      constraint:str="") -> dict:
     """
@@ -316,6 +365,7 @@ def FittedQIteration(observation_spaces:dict,
     :param action_spaces: Dictionary that maps agent to its action space
     :param agents: List of agent names
     :param dataset: Dictionary that maps each agent to its experience tuple
+    :param csv_save_dir:
     :param config_args: Configuration arguments used to set up the experiment
     :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the policy
     :returns A dictionary that maps each agent to its learned policy
@@ -330,6 +380,7 @@ def FittedQIteration(observation_spaces:dict,
     target_network = {}     # Dictionary for storing target networks (maps agent to a network)
     optimizer = {}          # Dictionary for storing optimizers for each RL problem
     actor_optimizer = {}    # Dictionary for storing the optimizers used to train the actor networks 
+    actor_losses = {}       # Dictionary that maps each agent to the loss values for its actor network (used for logging)
 
     for agent in agents:
         observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
@@ -339,12 +390,15 @@ def FittedQIteration(observation_spaces:dict,
         target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
         optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
         actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=config_args.learning_rate)
+        actor_losses[agent] = None
 
     # Define loss functions for the critic and actor
     loss_fn = nn.MSELoss() 
     actor_loss_fn = nn.CrossEntropyLoss()
 
-    # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
+    # Define a single experience sample that can be used to periodically evaluate the network to test for convergence
+    eval_obses, eval_actions, eval_next_obses, eval_g1s, eval_g2s, eval_dones = dataset[agents[0]].sample(1)
+    
     for global_step in range(config_args.total_timesteps):
 
         if config_args.global_obs:
@@ -354,8 +408,7 @@ def FittedQIteration(observation_spaces:dict,
         # Training for each agent
         for agent in agents:
 
-            # TODO: start learning immediately? there's no need to delay
-            if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
+            if (global_step % config_args.train_frequency == 0):  
                 
                 # Sample data from the dataset
                 s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
@@ -398,6 +451,7 @@ def FittedQIteration(observation_spaces:dict,
                 # input is the policy dist and the target is the value function with one-hot encoding applied
                 q_values_one_hot = one_hot_q_values(q_values)
                 actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
+                actor_losses[agent] = actor_loss.item()
 
                 actor_optimizer[agent].zero_grad()
                 actor_loss.backward()
@@ -407,6 +461,19 @@ def FittedQIteration(observation_spaces:dict,
                 # Update the target network
                 if global_step % args.target_network_frequency == 0:
                     target_network[agent].load_state_dict(q_network[agent].state_dict())
+
+                
+        # Periodically log data to CSV
+        if (global_step % 1000 == 0):
+
+            # Evaluate the probability of the first agent selecting the first action from the evaluation state
+            a, log_pi, action_probs = actor_network[agents[0]].get_action(eval_obses)
+            first_agent_first_action_probs = (action_probs.squeeze())[0].item() # Cast from tensor object to float
+
+            with open(f"{csv_save_dir}/FQI_actor_loss.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
+                csv_writer.writerow({**actor_losses, **{'Pi(a|s) Sample' : first_agent_first_action_probs,
+                                                            'global_step' : global_step}})
 
     stop_time = datetime.now()
     print(" >> Fitted Q Iteration complete")
@@ -420,6 +487,7 @@ def FittedQEvaluation(observation_spaces:dict,
                      agents:list,
                      policy:dict,
                      dataset:dict, 
+                     csv_save_dir:str,
                      config_args, 
                      constraint:str="") -> dict:
     """
@@ -432,6 +500,7 @@ def FittedQEvaluation(observation_spaces:dict,
     :param agents: List of agent names
     :param policy: Dictionary that maps an agent to its policy to be evaluated
     :param dataset: Dictionary that maps each agent to its experience tuple
+    :param csv_save_dir:
     :param config_args: Configuration arguments used to set up the experiment
     :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the value function
     :returns A dictionary that maps each agent to its learned constraint value function
@@ -441,10 +510,11 @@ def FittedQEvaluation(observation_spaces:dict,
     print(" >> Beginning Fitted Q Evaluation")
     start_time = datetime.now()
 
-    q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
+    q_network = {}      # Dictionary for storing q-networks (maps agent to a q-network)
     target_network = {} # Dictionary for storing target networks (maps agent to a network)
-    optimizer = {}  # Dictionary for storing optimizers for each RL problem
-    actions = {}
+    optimizer = {}      # Dictionary for storing optimizers for each RL problem
+    actions = {}        # Dictionary that maps each agent to the action it selected
+    losses = {}         # Dictionary that maps each agent to the loss values for its critic network
 
     for agent in agents:
         observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
@@ -457,6 +527,9 @@ def FittedQEvaluation(observation_spaces:dict,
     # Define loss function as MSE loss
     loss_fn = nn.MSELoss() 
 
+    # Define a single experience sample that can be used to periodically evaluate the network to test for convergence
+    eval_obses, eval_actions, eval_next_obses, eval_g1s, eval_g2s, eval_dones = dataset[agents[0]].sample(1)
+
     # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
     for global_step in range(config_args.total_timesteps):
 
@@ -467,8 +540,7 @@ def FittedQEvaluation(observation_spaces:dict,
         # Training for each agent
         for agent in agents:
             
-            # TODO: start learning immediately? there's no need to delay
-            if (global_step > config_args.learning_starts) and (global_step % config_args.train_frequency == 0):  
+            if (global_step % config_args.train_frequency == 0):  
                 
                 # Sample data from the dataset
                 s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
@@ -508,6 +580,7 @@ def FittedQEvaluation(observation_spaces:dict,
                 # print(f"old_val size: {old_val.size()}")    # 32
 
                 loss = loss_fn(td_target, old_val)
+                losses[agent] = loss.item()
 
                 # optimize the model
                 optimizer[agent].zero_grad()
@@ -518,6 +591,19 @@ def FittedQEvaluation(observation_spaces:dict,
                 # Update the target network
                 if global_step % args.target_network_frequency == 0:
                     target_network[agent].load_state_dict(q_network[agent].state_dict())
+
+
+        # Periodically log data to CSV
+        if (global_step % 100 == 0):
+
+            # Evaluate the Q(s,a) of the first agent selecting the first action from the evaluation state
+            eval_q_s_a = q_network[agents[0]].forward(eval_obses).squeeze()
+            first_agent_first_action_value = eval_q_s_a[0].item()   # cast the tensor object to a float
+
+            with open(f"{csv_save_dir}/FQE_loss.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample', 'global_step'])
+                csv_writer.writerow({**losses, **{'Q(s,a) Sample' : first_agent_first_action_value,
+                                                            'global_step' : global_step}})
 
     stop_time = datetime.now()
     print(" >> Fitted Q Evaluation complete")
@@ -553,7 +639,7 @@ def EvaluatePolicyEnsemble(agent_ensembles:dict,
         agent_policy_outputs = []
         
         for policy in agent_ensembles[agent]:
-            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_done = dataset[agent].sample(config_args.batch_size)
+            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
             action, log_prob, action_probs = policy.get_action(s_next_obses)    # TODO: do we use s_obses or s_next_obses here?
             
             agent_policy_outputs.append(action_probs)
@@ -619,7 +705,7 @@ def EvaluateConstraintEnsemble(agent_ensembles:dict,
         agent_constraint_outputs = []
         
         for constraint_function in agent_ensembles[agent]:
-            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_done = dataset[agent].sample(config_args.batch_size)
+            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
             # TODO: this is the only line that is different from EvaluatePolicyEnsemble so these functions
             # should probbably be combined
             action_values = constraint_function.forward(s_obses)    
@@ -798,7 +884,6 @@ if __name__ == "__main__":
     # Pull some information from env
     agents = env.possible_agents
     num_agents = len(env.possible_agents)
-    # TODO: these dictionaries are deprecated, use action_space & observation_space functions instead
     action_spaces = env.action_spaces
     observation_spaces = env.observation_spaces
 
@@ -868,7 +953,7 @@ if __name__ == "__main__":
     dataset = GenerateDataset(env, 
                               q_network, 
                               optimal_action_ratio=0.8, 
-                              num_episodes=2,   # TODO: Update this once we done debugging 
+                              num_episodes=50,   
                               episode_steps=args.sumo_seconds)
 
     """
