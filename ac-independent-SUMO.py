@@ -411,7 +411,8 @@ for global_step in range(args.total_timesteps):
             # Compute the loss for this agent's actor
             # NOTE: Actor uses cross-entropy loss function where
             # input is the policy dist and the target is the value function with one-hot encoding applied
-            q_values_one_hot = one_hot_q_values(q_values)
+            # Q-values from "critic" encoded so that the highest state-action value maps to a probability of 1
+            q_values_one_hot = one_hot_q_values(q_values)    
             actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
             actor_losses[agent] = actor_loss.item()
 

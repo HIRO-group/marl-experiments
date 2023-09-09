@@ -89,7 +89,8 @@ class MARLConfigParser():
                             help="The directory containing the nn .pt files to load for analysis.\n")
         self.parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", action="store_true", default=False, required=False, 
                             help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
-        
+        self.parser.add_argument("--dataset-path", dest="dataset_path", type=str, default="", required=False, 
+                            help="Path to previously generated dataset .pkl file.\n")
 
     def parse_args(self):
         return self.parser.parse_args()
