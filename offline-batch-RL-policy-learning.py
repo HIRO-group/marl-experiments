@@ -65,13 +65,13 @@ def CalculateMaxSpeedOverage(max_speed:float, speed_limit:float) -> float:
 
 
 def GenerateDataset(env: sumo_rl.parallel_env, 
-                    q_network: dict, 
+                    list_of_policies: list,
                     optimal_action_ratio:float = 0.8, 
                     num_episodes:int=100, 
                     episode_steps=1000) -> dict:
     """
     :param env: The sumo environment
-    :param q_netowrk: The trained neural network used to generate the dataset by acting in the environment
+    :param list_of_policies: A list of trained neural networks used to generate the dataset by acting in the environment
     :param optimal_action_ratio: Number specifying the fraction of time in which an optimal action should be taken
             e.g. 0.8 of all actions should be "optimal" (according to the provdied q_network), 0.2 of all actions
             will therefore be random
@@ -85,7 +85,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     DATASET_SIZE = num_episodes*episode_steps
     SPEED_OVERAGE_THRESHOLD = 13.89
     agents = env.possible_agents
-    
+
     # Initialize the dataset as a dictionary that maps agents to Dataset objects that are full of experience
     dataset = {agent : Dataset(DATASET_SIZE) for agent in agents}
 
@@ -107,9 +107,14 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
             # Set the action for each agent
             for agent in agents:
-                if (random.random() < (1-optimal_action_ratio)):
+                random_number = random.random()
+                if (random_number < (1-optimal_action_ratio)):
                     actions[agent] = action_spaces[agent].sample()
                 else:
+
+                    # Give equal probability to each of the provided policies
+                    q_network = random.choice(list_of_policies)
+
                     # Actor choses the actions
                     action, _, _ = q_network[agent].get_action(obses[agent])
                     actions[agent] = action.detach().cpu().numpy()
@@ -141,7 +146,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
 def OfflineBatchRL(env:sumo_rl.parallel_env,
                     dataset: dict,
-                    dataset_policy: dict,
+                    # dataset_policy: dict,
                     perform_rollout_comparisons:bool,
                     config_args,
                     nn_save_dir:str,
@@ -206,14 +211,14 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
     # Create csv files if we plan to compare the learned policy to the dataset policy each round
     # Each round, we will store the return for both constraints for the learned policy and the dataset policy
-    if perform_rollout_comparisons:
-        with open(f"{csv_save_dir}/rollout_pi_d_constraint_1.csv", "w", newline="") as csvfile:
-            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
-            csv_writer.writeheader()
+    # if perform_rollout_comparisons:
+    #     with open(f"{csv_save_dir}/rollout_pi_d_constraint_1.csv", "w", newline="") as csvfile:
+    #         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
+    #         csv_writer.writeheader()
 
-        with open(f"{csv_save_dir}/rollout_pi_d_constraint_2.csv", "w", newline="") as csvfile: 
-            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
-            csv_writer.writeheader()
+    #     with open(f"{csv_save_dir}/rollout_pi_d_constraint_2.csv", "w", newline="") as csvfile: 
+    #         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
+    #         csv_writer.writeheader()
 
         with open(f"{csv_save_dir}/rollout_mean_pi_constraint_1.csv", "w", newline="") as csvfile:
             csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
@@ -263,7 +268,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     constraint=constraint)
         # Save the value function every round
         for a in agents:
-            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/constraint_{t}-{a}.pt")        
+            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/queue/constraint_{t}-{a}.pt")        
         
         # Calculate 1/t*(pi + t-1(E[pi])) for each agent
         mean_policies = CalculateMeanPolicy(policies,
@@ -276,6 +281,10 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                             csv_save_dir,
                                             config_args)
 
+        # Save the mean policy each round
+        for a in agents:
+            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/policies/mean/policy_{t}-{a}.pt")        
+
         # Calculate 1/t*(g2 + t-1(E[g2])) for each agent
         mean_g2_constraints = CalculateMeanConstraint(G2_pi,
                                                       prev_g2_constraints,
@@ -286,6 +295,10 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                       dataset,
                                                       csv_save_dir,
                                                       config_args)
+
+        # Save the mean policy each round
+        for a in agents:
+            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/queue/mean/constraint_{t}-{a}.pt")        
 
         # Update mean networks for the next round
         prev_mean_policies = mean_policies
@@ -304,25 +317,24 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # At the end of each round, compare the latest policy to the one that was used to generate the dataset
         if perform_rollout_comparisons:
-            print(f" >> Performing rollout comparison between learned policy and dataset policy")
+            # print(f" >> Performing rollout comparison between learned policy and dataset policy")
             
-            # Run the rollout on the dataset policy
-            episode_rewards_pi_d, episode_constraint_1_pi_d, episode_constraint_2_pi_d = PerformRollout(env, dataset_policy, config_args)
+            # # Run the rollout on the dataset policy
+            # episode_rewards_pi_d, episode_constraint_1_pi_d, episode_constraint_2_pi_d = PerformRollout(env, dataset_policy, config_args)
             
-            # Add it all up
-            system_episode_reward_pi_d = sum(list(episode_rewards_pi_d.values())) # Accumulated reward of all agents
-            system_episode_constraint_1_pi_d = sum(list(episode_constraint_1_pi_d.values())) 
-            system_episode_constraint_2_pi_d = sum(list(episode_constraint_2_pi_d.values())) 
+            # # Add it all up
+            # system_episode_reward_pi_d = sum(list(episode_rewards_pi_d.values())) # Accumulated reward of all agents
+            # system_episode_constraint_1_pi_d = sum(list(episode_constraint_1_pi_d.values())) 
+            # system_episode_constraint_2_pi_d = sum(list(episode_constraint_2_pi_d.values())) 
             
-            # Log the data for the dataset policy
-            with open(f"{csv_save_dir}/rollout_pi_d_constraint_1.csv", "a", newline="") as csvfile: 
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
-                csv_writer.writerow({**episode_constraint_1_pi_d, **{'system_episode_constraint_1' : system_episode_constraint_1_pi_d, 'round' : t}})
+            # # Log the data for the dataset policy
+            # with open(f"{csv_save_dir}/rollout_pi_d_constraint_1.csv", "a", newline="") as csvfile: 
+            #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
+            #     csv_writer.writerow({**episode_constraint_1_pi_d, **{'system_episode_constraint_1' : system_episode_constraint_1_pi_d, 'round' : t}})
             
-            with open(f"{csv_save_dir}/rollout_pi_d_constraint_2.csv", "a", newline="") as csvfile: 
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
-                csv_writer.writerow({**episode_constraint_2_pi_d, **{'system_episode_constraint_2' : system_episode_constraint_2_pi_d, 'round' : t}})
-
+            # with open(f"{csv_save_dir}/rollout_pi_d_constraint_2.csv", "a", newline="") as csvfile: 
+            #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
+            #     csv_writer.writerow({**episode_constraint_2_pi_d, **{'system_episode_constraint_2' : system_episode_constraint_2_pi_d, 'round' : t}})
 
             # Run the rollout on current mean policy
             episode_rewards_pi_mean, episode_constraint_1_pi_mean, episode_constraint_2_pi_mean = PerformRollout(env, mean_policies, config_args)
@@ -812,6 +824,8 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
     This function assumes that the environment has been set up with the 'queue' reward function when evaluating the
     g1 and g2 constraints.
 
+    NOTE: this is an "online" rollout because it assumes that all agents are using their current learned policy
+
     :param env: The environment to execute the policy in
     :param policy: Dictionary that maps agents to "actor" models
     :param config_args: Configuration arguments used to set up the experiment
@@ -877,6 +891,13 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
         
     return episode_rewards, episode_constraint_1, episode_constraint_2
 
+def PerformOfflineRollout(policy, mini_dataset)->float:
+    # TODO
+    pass
+
+def OnlineLambdaLearning(G_1, G_2, lambda_1_prev, lambda_2_prev)->(float, float):
+    # TODO
+    pass
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 if __name__ == "__main__":
@@ -892,19 +913,19 @@ if __name__ == "__main__":
     # device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
     device = 'cpu'
     print(f"DEVICE: {device}")
-    analysis_steps = args.analysis_steps                    # Defines which checkpoint will be loaded into the Q model
-    parameter_sharing_model = args.parameter_sharing_model  # Flag indicating if we're loading a model from DQN with PS
-    nn_load_directory = args.nn_directory 
-    nn_dir = f"{nn_load_directory}"                              # Name of directory containing the stored nn from training
+    analysis_steps = args.analysis_steps                        # Defines which checkpoint will be loaded into the Q model
+    parameter_sharing_model = args.parameter_sharing_model      # Flag indicating if we're loading a model from DQN with PS
+    nn_queue_dir = f"{args.nn_queue_directory}"                 # Name of directory containing the stored queue model nn from training
+    nn_speed_overage_dir = f"{args.nn_speed_overage_directory}" # Name of directory containing the stored speed overage model nn from training
     
     # Initialize directories for logging, note that that models will be saved to subfolders created in the directory that was used to 
     # generate the dataset
     experiment_time = str(datetime.now()).split('.')[0].replace(':','-')   
     experiment_name = "{}__N{}__exp{}__seed{}__{}".format(args.gym_id, args.N, args.exp_name, args.seed, experiment_time)
-    nn_save_dir = f"{nn_load_directory}/batch_offline_RL/{experiment_name}"
-    csv_save_dir = f"{nn_save_dir}/csv" 
-    os.makedirs(f"{nn_save_dir}/policies")
-    os.makedirs(f"{nn_save_dir}/constraints")
+    save_dir = f"batch_offline_RL_logs/{experiment_name}"
+    csv_save_dir = f"{save_dir}/csv" 
+    os.makedirs(f"{save_dir}/policies")
+    os.makedirs(f"{save_dir}/constraints")
     os.makedirs(csv_save_dir)
 
     print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
@@ -961,7 +982,7 @@ if __name__ == "__main__":
     # Construct the Q-Network model. This is the agent that will be used to generate the dataset
     # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
     # DQN model was used
-
+    list_of_policies = []
     if parameter_sharing_model:
         # Define the shape of the observation space depending on if we're using a global observation or not
         # Regardless, we need to add an array of length num_agents to the observation to account for one hot encoding
@@ -972,25 +993,46 @@ if __name__ == "__main__":
             observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
             observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
 
-        q_network = Actor(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+        # Queue model policies
+        queue_model_policies = Actor(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
         
         # Load the Q-network file
-        nn_file = "{}/{}.pt".format(nn_dir, analysis_steps)
-        q_network.load_state_dict(torch.load(nn_file))
+        nn_queue_file = "{}/{}.pt".format(nn_queue_dir, analysis_steps)
+        queue_model_policies.load_state_dict(torch.load(nn_queue_file))
+
+        # Speed overage model policies
+        speed_overage_model_policies = Actor(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+
+        # Load the Q-network file
+        nn_speed_overage_file = "{}/{}.pt".format(nn_speed_overage_dir, analysis_steps)
+        speed_overage_model_policies.load_state_dict(torch.load(nn_speed_overage_file))
+
 
     # Else the agents were trained using normal independent DQN so each agent gets its own Q-network model
     else: 
         
-        q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
-        
+        queue_model_policies = {}  # Dictionary for storing q-networks (maps agent to a q-network)
+        speed_overage_model_policies = {}
+
         # Load the Q-Network NN model for each agent from the specified anaylisis checkpoint step from training
         for agent in agents: 
             observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
-            q_network[agent] = Actor(observation_space_shape, action_spaces[agent].n)
+            queue_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n)
+            speed_overage_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n)
 
-            nn_file = "{}/{}-{}.pt".format(nn_dir, analysis_steps, agent) 
-            q_network[agent].load_state_dict(torch.load(nn_file))
-            print(" > Loading NN from file: {} for dataset generation".format(nn_file))
+            # Queue model policies
+            nn_queue_file = "{}/{}-{}.pt".format(nn_queue_dir, analysis_steps, agent) 
+            queue_model_policies[agent].load_state_dict(torch.load(nn_queue_file))
+            print(" > Loading NN from file: {} for dataset generation".format(nn_queue_file))
+
+            # Repeat for speed overage model policies
+            nn_speed_overage_file = "{}/{}-{}.pt".format(nn_speed_overage_dir, analysis_steps, agent) 
+            speed_overage_model_policies[agent].load_state_dict(torch.load(nn_speed_overage_file))
+            print(" > Loading NN from file: {} for dataset generation".format(nn_speed_overage_file))
+
+
+    list_of_policies.append(queue_model_policies)
+    list_of_policies.append(speed_overage_model_policies)
 
     # Seed the env
     env.reset(seed=args.seed)
@@ -1018,18 +1060,19 @@ if __name__ == "__main__":
 
         # We need to generate the dataset
         dataset = GenerateDataset(env, 
-                              q_network, 
-                              optimal_action_ratio=0.75, 
-                              num_episodes=2,   
+                              list_of_policies, 
+                              optimal_action_ratio=0.8, 
+                              num_episodes=50,   
                               episode_steps=args.sumo_seconds)
         
-        dataset_save_dir = f"{nn_save_dir}/dataset"
+        dataset_save_dir = f"{save_dir}/dataset"
         os.makedirs(dataset_save_dir)
 
         with open(f"{dataset_save_dir}/dataset.pkl", "wb") as f:
             pickle.dump(dataset, f)
 
     else:
+        print(f" > Loading dataset from: {args.dataset_path}")
         # Load the previously generated dataset
         with open(f"{args.dataset_path}", "rb") as f:
             dataset = pickle.load(f)
@@ -1043,10 +1086,10 @@ if __name__ == "__main__":
     perform_rollout_comparisons = True
     policy_expectation, constraint_expectation = OfflineBatchRL(env,
                                                                 dataset, 
-                                                                q_network,
+                                                                #q_network,
                                                                 perform_rollout_comparisons,
                                                                 args, 
-                                                                nn_save_dir,
+                                                                save_dir,
                                                                 csv_save_dir,
                                                                 constraint="queue")
 
