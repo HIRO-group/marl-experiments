@@ -152,6 +152,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                     config_args,
                     nn_save_dir:str,
                     csv_save_dir:str,
+                    max_num_rounds:int=10,
                     constraint:str="") -> (dict, dict):
 
     """
@@ -169,7 +170,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
       compare the dataset policy with the mean policy
     :param config_args: Configuration arguments used to set up the experiment
     :param nn_save_dir: Directory in which to save the models each round
-    :pram csv_save_dir: Directory in which to save the csv file 
+    :pram csv_save_dir: Directory in which to save the csv file
+    :param max_num_rounds: The number of rounds to perform (T)
     :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the policy
     :returns A dictionary that maps each agent to its learned policy
     """
@@ -185,7 +187,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         print(f" >> Constraint '{constraint}' recognized!")
 
     # TODO: could make these configs
-    MAX_NUM_ROUNDS = 10
     # OMEGA = 0.1   # TODO: we don't know what this should be yet
 
     agents = env.possible_agents
@@ -241,7 +242,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         prev_g2_constraints[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
 
     # for t=1:T
-    for t in range(1,MAX_NUM_ROUNDS+1):
+    for t in range(1,max_num_rounds+1):
         print(f" >> BEGINNING ROUND: {t}")
         round_start_time = datetime.now()
         # Learn a policy that optimizes actions for the "g2" constraint
@@ -1087,5 +1088,6 @@ if __name__ == "__main__":
                                                                 args, 
                                                                 save_dir,
                                                                 csv_save_dir,
+                                                                max_num_rounds=10,
                                                                 constraint="queue")
 
