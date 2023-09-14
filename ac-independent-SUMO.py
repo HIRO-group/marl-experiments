@@ -383,7 +383,7 @@ for global_step in range(args.total_timesteps):
         
         # ALGO LOGIC: critic training
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
-        if global_step > args.learning_starts and global_step % args.train_frequency == 0:
+        if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
             # print(" >>> s_obses: {}".format(s_obses))
             with torch.no_grad():
@@ -411,7 +411,8 @@ for global_step in range(args.total_timesteps):
             # Compute the loss for this agent's actor
             # NOTE: Actor uses cross-entropy loss function where
             # input is the policy dist and the target is the value function with one-hot encoding applied
-            q_values_one_hot = one_hot_q_values(q_values)
+            # Q-values from "critic" encoded so that the highest state-action value maps to a probability of 1
+            q_values_one_hot = one_hot_q_values(q_values)    
             actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
             actor_losses[agent] = actor_loss.item()
 

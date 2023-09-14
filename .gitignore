@@ -2,5 +2,6 @@ nn/
 runs/
 csv/
 analysis/
+batch_offline_RL_logs/
 .venv/
 __pycache__/

@@ -285,7 +285,7 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
 q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network)
 target_network = {} # Dictionary for storing target networks (maps agent to a network)
-optimizer = {}  # Dictionary for storing 
+optimizer = {}  # Dictionary for storing optimizers for each RL problem
 
 for agent in agents:
     observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
@@ -300,7 +300,7 @@ print(device.__repr__())
 print(q_network[agent]) # network of last agent
 
 # TRY NOT TO MODIFY: start the game
-obses = env.reset()
+obses, _ = env.reset()
 
 # Global states
 if args.global_obs:
@@ -358,6 +358,7 @@ for global_step in range(args.total_timesteps):
         if global_step > args.learning_starts and global_step % args.train_frequency == 0:
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
             with torch.no_grad():
+                
                 target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
                 td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
             old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
@@ -441,7 +442,7 @@ for global_step in range(args.total_timesteps):
                 env.unwrapped.save_csv(sumo_csv, global_step)
             
         # Reset the env to continue training            
-        obses = env.reset()
+        obses, _ = env.reset()
         lir_1 = 0
         uir_1 = 0
         var_1 = 0
