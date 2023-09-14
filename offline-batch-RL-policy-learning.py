@@ -2,13 +2,15 @@
 offline-batch-RL-policy-learning.py
 
 Description:
-
+    Offline batch RL for learning a policy subject to constraints. The idea here is that we can utilize experiences from various 
+    policies to learn a new policy that is optimal according to some objective function and also obeys some secondary constraints. 
+    This algorithm is essentially decentralized
 
 Usage:
-
+    python offline-batch-RL-policy-learning.py -c experiments/sumo-2x2-ac-independent.config    
 
 References:
-
+    https://arxiv.org/pdf/1903.08738.pdf
 
 """
 
@@ -146,7 +148,6 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
 def OfflineBatchRL(env:sumo_rl.parallel_env,
                     dataset: dict,
-                    # dataset_policy: dict,
                     perform_rollout_comparisons:bool,
                     config_args,
                     nn_save_dir:str,
@@ -184,7 +185,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         print(f" >> Constraint '{constraint}' recognized!")
 
     # TODO: could make these configs
-    MAX_NUM_ROUNDS = 10
+    MAX_NUM_ROUNDS = 1
     # OMEGA = 0.1   # TODO: we don't know what this should be yet
 
     agents = env.possible_agents
@@ -209,6 +210,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         csv_writer.writeheader()
 
 
+    # TODO: do we want to do "offline" rollouts for all non-random policies that were used to generate the dataset?
     # Create csv files if we plan to compare the learned policy to the dataset policy each round
     # Each round, we will store the return for both constraints for the learned policy and the dataset policy
     # if perform_rollout_comparisons:
@@ -430,19 +432,21 @@ def FittedQIteration(observation_spaces:dict,
                 # print(f"s_obses {s_obses}, s_actions {s_actions}, s_next_obses {s_next_obses}, s_g1s {s_g1s}, s_g2s {s_g2s}, s_dones {s_dones}")
                 # Compute the target
                 with torch.no_grad():
-                    # Calculate min_a Q(s',a)
-                    target_min = torch.min(target_network[agent].forward(s_next_obses), dim=1)[0]
+                    # Calculate max_a Q(s',a)
+                    # NOTE: that the original FQI in the paper used min_a here but our constaint values are the negative version of theirs
+                    # so we need to take max here
+                    target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
                     
                     # Calculate the full TD target 
-                    # Note that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
+                    # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
                     if (constraint == "speed_overage"):
                         # Use the "g1" constraint
-                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_min * (1 - torch.Tensor(s_dones).to(device))
+                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
                     elif (constraint == "queue"):
                         # Use the "g2" constraint
-                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_min * (1 - torch.Tensor(s_dones).to(device))
+                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
                     else: 
                         print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
@@ -924,8 +928,8 @@ if __name__ == "__main__":
     experiment_name = "{}__N{}__exp{}__seed{}__{}".format(args.gym_id, args.N, args.exp_name, args.seed, experiment_time)
     save_dir = f"batch_offline_RL_logs/{experiment_name}"
     csv_save_dir = f"{save_dir}/csv" 
-    os.makedirs(f"{save_dir}/policies")
-    os.makedirs(f"{save_dir}/constraints")
+    os.makedirs(f"{save_dir}/policies/mean")
+    os.makedirs(f"{save_dir}/constraints/queue/mean")
     os.makedirs(csv_save_dir)
 
     print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
@@ -1086,7 +1090,6 @@ if __name__ == "__main__":
     perform_rollout_comparisons = True
     policy_expectation, constraint_expectation = OfflineBatchRL(env,
                                                                 dataset, 
-                                                                #q_network,
                                                                 perform_rollout_comparisons,
                                                                 args, 
                                                                 save_dir,
