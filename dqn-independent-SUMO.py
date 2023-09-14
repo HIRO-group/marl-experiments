@@ -360,9 +360,6 @@ for global_step in range(args.total_timesteps):
             with torch.no_grad():
                 
                 target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
-                print(">>>>>>>>> TARGET: {}".format(target_network[agent].forward(s_next_obses)))
-                print()
-                print(">>>>>>>>> TARGET MAX: {}".format(target_max))
                 td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
             old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
             loss = loss_fn(td_target, old_val)

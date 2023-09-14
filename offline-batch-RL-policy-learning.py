@@ -185,7 +185,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         print(f" >> Constraint '{constraint}' recognized!")
 
     # TODO: could make these configs
-    MAX_NUM_ROUNDS = 1
+    MAX_NUM_ROUNDS = 10
     # OMEGA = 0.1   # TODO: we don't know what this should be yet
 
     agents = env.possible_agents
@@ -253,7 +253,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     csv_save_dir,
                                     config_args, 
                                     constraint=constraint) 
-        # TODO: save the policy here and add ability to load?
         # Save the policy every round
         for a in agents:
             torch.save(policies[a].state_dict(), f"{nn_save_dir}/policies/policy_{t}-{a}.pt")
@@ -574,7 +573,7 @@ def FittedQEvaluation(observation_spaces:dict,
                 with torch.no_grad():
                     
                     # Calculate Q(s',pi(s'))
-                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent).view(-1,1)).squeeze().to(device)  # Size 32,1 
+                    target = target_network[agent].forward(s_next_obses).gather(1, torch.LongTensor(actions_for_agent).view(-1,1)).squeeze().to(device)  
                     # Calculate the full TD target 
                     # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
@@ -592,12 +591,6 @@ def FittedQEvaluation(observation_spaces:dict,
                 # TODO: when calculating the "old value" should s_actions be used here? or should actions_for_agent? (i.e. should they come from
                 # experience tuple or policy)
                 old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
-
-                # print(f"target_network[agent].forward(s_next_obses) size: {target_network[agent].forward(s_next_obses).size()}")    # 32, 4
-                # print(f"actions_for_agent size: {actions_for_agent.size()}")    # 32
-                # print(f"target size: {target.size()}")  # 32, 1
-                # print(f"td_target size: {td_target.size()}")    # 32, 32 (needs to be 32)
-                # print(f"old_val size: {old_val.size()}")    # 32
 
                 loss = loss_fn(td_target, old_val)
                 losses[agent] = loss.item()
