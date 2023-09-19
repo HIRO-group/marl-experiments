@@ -152,9 +152,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                     config_args,
                     nn_save_dir:str,
                     csv_save_dir:str,
-                    max_num_rounds:int=10,
-                    constraint:str="") -> (dict, dict):
-
+                    max_num_rounds:int=10) -> (dict, dict):
     """
     Perform offline batch reinforcement learning
     Here we use a provided dataset to learn and evaluate a policy for a given number of "rounds"
@@ -172,22 +170,18 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     :param nn_save_dir: Directory in which to save the models each round
     :pram csv_save_dir: Directory in which to save the csv file
     :param max_num_rounds: The number of rounds to perform (T)
-    :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the policy
     :returns A dictionary that maps each agent to its learned policy
     """
 
     print(f" > Performing batch offline reinforcement learning")
     function_start_time = datetime.now()
 
-    # Check inputs
-    if not ((constraint == "queue") or (constraint == "speed_overage")):
-        print(f"ERROR: Constraint function '{constraint}' not recognized, unable to perform Offline Batch RL")
-        return {}, {}
-    else:
-        print(f" >> Constraint '{constraint}' recognized!")
-
-    # TODO: could make these configs
-    # OMEGA = 0.1   # TODO: we don't know what this should be yet
+    # # Check inputs
+    # if not ((constraint == "queue") or (constraint == "speed_overage")):
+    #     print(f"ERROR: Constraint function '{constraint}' not recognized, unable to perform Offline Batch RL")
+    #     return {}, {}
+    # else:
+    #     print(f" >> Constraint '{constraint}' recognized!")
 
     agents = env.possible_agents
     action_spaces = env.action_spaces
@@ -210,6 +204,14 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['global_step', 'round'])
         csv_writer.writeheader()
 
+    with open(f"{csv_save_dir}/rollouts.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + [agent + '_return_g1' for agent in agents] + 
+                                                        ['system_return_g1'] + 
+                                                        [agent + '_return_g2' for agent in agents] + 
+                                                        ['system_return_g2'] +
+                                                        ['mean_lambda_1', 'mean_lambda_2'])
+        csv_writer.writeheader()
+
 
     # TODO: do we want to do "offline" rollouts for all non-random policies that were used to generate the dataset?
     # Create csv files if we plan to compare the learned policy to the dataset policy each round
@@ -223,27 +225,43 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     #         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
     #         csv_writer.writeheader()
 
-        with open(f"{csv_save_dir}/rollout_mean_pi_constraint_1.csv", "w", newline="") as csvfile:
-            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
-            csv_writer.writeheader()
+        # with open(f"{csv_save_dir}/rollout_mean_pi_constraints.csv", "w", newline="") as csvfile:
+        #     csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + [agent + '_g1' for agent in agents] + 
+        #                                                     ['system_episode_g1'] + 
+        #                                                     [agent + '_g2' for agent in agents] + 
+        #                                                     ['system_episode_g2'])
+        #     csv_writer.writeheader()
 
-        with open(f"{csv_save_dir}/rollout_mean_pi_constraint_2.csv", "w", newline="") as csvfile: 
-            csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
-            csv_writer.writeheader()
+        # with open(f"{csv_save_dir}/rollout_mean_pi_constraint_2.csv", "w", newline="") as csvfile: 
+        #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
+        #     csv_writer.writeheader()
 
 
-    # Initialize the mean networks
+    # Initialize the mean networks and the rollout datasets
     prev_mean_policies = {}
+    prev_g1_constraints = {}
     prev_g2_constraints = {}
+    rollout_mini_dataset = {}
     num_agents = len(agents) 
     for agent in agents:
         observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
         prev_mean_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
+        prev_g1_constraints[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
         prev_g2_constraints[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+        print(f" >>>> config_args.batch_size: {config_args.batch_size}")
+        print(f" >>>> len(dataset[agent].buffer): {len(dataset[agent].buffer)}")
+        rollout_mini_dataset[agent] = dataset[agent].sample(config_args.batch_size) # TODO: how big should this be? Currently set to 32
+        print(f" >>>> len(rollout_mini_dataset[agent][0]): {len(rollout_mini_dataset[agent][0])}")
+
+    # Initialize both lambdas equally 
+    lambda_1 = 1.0/2.0
+    lambda_2 = 1.0/2.0
+    mean_lambda_1 = lambda_1
+    mean_lambda_2 = lambda_2
 
     # for t=1:T
     for t in range(1,max_num_rounds+1):
-        print(f" >> BEGINNING ROUND: {t}")
+        print(f" >> BEGINNING ROUND: {t} OF {max_num_rounds}")
         round_start_time = datetime.now()
         # Learn a policy that optimizes actions for the "g2" constraint
         # This is essentially the "actor", policies here are represented as probability density functions of taking an action given a state
@@ -253,13 +271,28 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     dataset, 
                                     csv_save_dir,
                                     config_args, 
-                                    constraint=constraint) 
+                                    constraint="weighted_sum",
+                                    lambda_1=lambda_1,
+                                    lambda_2=lambda_2) 
         # Save the policy every round
         for a in agents:
             torch.save(policies[a].state_dict(), f"{nn_save_dir}/policies/policy_{t}-{a}.pt")
 
+        # Evaluate the constraint value functions (these are essentially the "critics")
+        # Evaluate G_1^pi (the speed overage constraint)
+        G1_pi = FittedQEvaluation(observation_spaces, 
+                                    action_spaces, 
+                                    agents,
+                                    policies,
+                                    dataset, 
+                                    csv_save_dir,
+                                    config_args, 
+                                    constraint="speed_overage")
+        # Save the value function every round
+        for a in agents:
+            torch.save(G1_pi[a].state_dict(), f"{nn_save_dir}/constraints/speed_overage/constraint_{t}-{a}.pt")        
+        
         # Evaluate G_2^pi 
-        # This is essentially the "critic"
         G2_pi = FittedQEvaluation(observation_spaces, 
                                     action_spaces, 
                                     agents,
@@ -267,7 +300,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     dataset, 
                                     csv_save_dir,
                                     config_args, 
-                                    constraint=constraint)
+                                    constraint="queue")
         # Save the value function every round
         for a in agents:
             torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/queue/constraint_{t}-{a}.pt")        
@@ -285,7 +318,23 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # Save the mean policy each round
         for a in agents:
-            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/policies/mean/policy_{t}-{a}.pt")        
+            torch.save(mean_policies[a].state_dict(), f"{nn_save_dir}/policies/mean/policy_{t}-{a}.pt")        
+
+        # Calculate 1/t*(g1 + t-1(E[g1])) for each agent
+        mean_g1_constraints = CalculateMeanConstraint(G1_pi,
+                                                      prev_g1_constraints,
+                                                      observation_spaces,
+                                                      action_spaces,
+                                                      agents,
+                                                      t,
+                                                      dataset,
+                                                      csv_save_dir,
+                                                      config_args)
+
+        # Save the mean value function each round
+        for a in agents:
+            torch.save(mean_g1_constraints[a].state_dict(), f"{nn_save_dir}/constraints/speed_overage/mean/constraint_{t}-{a}.pt")  
+
 
         # Calculate 1/t*(g2 + t-1(E[g2])) for each agent
         mean_g2_constraints = CalculateMeanConstraint(G2_pi,
@@ -298,27 +347,48 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                       csv_save_dir,
                                                       config_args)
 
-        # Save the mean policy each round
+        # Save the mean value function each round
         for a in agents:
-            torch.save(G2_pi[a].state_dict(), f"{nn_save_dir}/constraints/queue/mean/constraint_{t}-{a}.pt")        
+            torch.save(mean_g2_constraints[a].state_dict(), f"{nn_save_dir}/constraints/queue/mean/constraint_{t}-{a}.pt")        
 
         # Update mean networks for the next round
         prev_mean_policies = mean_policies
         prev_g2_constraints = mean_g2_constraints
+        prev_g1_constraints = mean_g1_constraints
 
-        # # # Evaluate difference but don't use it for an exit condition (yet) because we don't know what 
-        # # # OMEGA should be set to
-        # # # Note that we are calculating omega for each agent first then taking the norm of the "vector" of omegas
-        # # omega_dict = {}
-        # # for agent in agents:
-        # #     agent_omega = torch.linalg.vector_norm(expectation_pi[agent] - expectation_g2[agent])
-        # #     omega_dict[agent] = agent_omega.item()  # Store the values as floats in the dict
 
-        # # # Convert the omega_dict values to list then to a tensor and then take the norm of it
-        # # omega = torch.linalg.vector_norm(torch.tensor(list(omega_dict.values()))).item()
+        # Perform offline rollouts using each value function and a small portion of the provided dataset
+        # NOTE: The returns here are dictionaries that map agents to their return
+        g1_returns = PerformOfflineRollout(G1_pi, rollout_mini_dataset)
+        g2_returns = PerformOfflineRollout(G2_pi, rollout_mini_dataset)
 
-        # At the end of each round, compare the latest policy to the one that was used to generate the dataset
-        if perform_rollout_comparisons:
+        # Adjust lambda
+        lambda_1, lambda_2 = OnlineLambdaLearning(lambda_1, lambda_2, g1_returns, g2_returns)
+
+        if (t > 1):
+            # On the first round, the expected value of lambda was set as the initial value of lambda
+            mean_lambda_1 = 1/t*(lambda_1 + mean_lambda_1)
+            mean_lambda_2 = 1/t*(lambda_2 + mean_lambda_2)
+
+        # TODO: create a dictionary for logging instead of trying to frankenstein it
+
+        # Save the rollout returns and the updated lambdas
+        with open(f"{csv_save_dir}/rollouts.csv", "w", newline="") as csvfile:
+            csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + [agent + '_return_g1' for agent in agents] + 
+                                                            ['system_return_g1'] + 
+                                                            [agent + '_return_g2' for agent in agents] + 
+                                                            ['system_return_g2'] +
+                                                            ['mean_lambda_1', 'mean_lambda_2'])
+            csv_writer.writerow(**{'round' : t,  
+                                    **{agent + '_return_g1' : g1_returns[agent] for agent in agents},
+                                    'system_return_g1' : torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy(),
+                                    **{agent + '_return_g2' : g2_returns[agent] for agent in agents},
+                                    'system_return_g2' : torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy(),
+                                    'mean_lambda_1' : mean_lambda_1,
+                                    'mean_lambda_2' : mean_lambda_2 })
+            
+        # # At the end of each round, compare the latest policy to the one that was used to generate the dataset
+        # if perform_rollout_comparisons:
             # print(f" >> Performing rollout comparison between learned policy and dataset policy")
             
             # # Run the rollout on the dataset policy
@@ -338,21 +408,23 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
             #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
             #     csv_writer.writerow({**episode_constraint_2_pi_d, **{'system_episode_constraint_2' : system_episode_constraint_2_pi_d, 'round' : t}})
 
-            # Run the rollout on current mean policy
-            episode_rewards_pi_mean, episode_constraint_1_pi_mean, episode_constraint_2_pi_mean = PerformRollout(env, mean_policies, config_args)
+            # # Run the rollout on current mean policy
+            # episode_rewards_pi_mean, episode_constraint_1_pi_mean, episode_constraint_2_pi_mean = PerformRollout(env, mean_policies, config_args)
 
-            # Add it all up
-            system_episode_reward_pi_t = sum(list(episode_rewards_pi_mean.values())) # Accumulated reward of all agents
-            system_episode_constraint_1_pi_mean = sum(list(episode_constraint_1_pi_mean.values())) 
-            system_episode_constraint_2_pi_mean = sum(list(episode_constraint_2_pi_mean.values())) 
+            # # Add it all up
+            # system_episode_reward_pi_t = sum(list(episode_rewards_pi_mean.values())) # Accumulated reward of all agents
+            # system_episode_constraint_1_pi_mean = sum(list(episode_constraint_1_pi_mean.values())) 
+            # system_episode_constraint_2_pi_mean = sum(list(episode_constraint_2_pi_mean.values())) 
 
-            with open(f"{csv_save_dir}/rollout_mean_pi_constraint_1.csv", "a", newline="") as csvfile:
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
-                csv_writer.writerow({**episode_constraint_1_pi_mean, **{'system_episode_constraint_1' : system_episode_constraint_1_pi_mean, 'round' : t}})
+            # with open(f"{csv_save_dir}/rollout_mean_pi_constraint_1.csv", "a", newline="") as csvfile:
+            #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_1', 'round'])
+            #     csv_writer.writerow({**episode_constraint_1_pi_mean, **{'system_episode_constraint_1' : system_episode_constraint_1_pi_mean, 'round' : t}})
 
-            with open(f"{csv_save_dir}/rollout_mean_pi_constraint_2.csv", "a", newline="") as csvfile: 
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
-                csv_writer.writerow({**episode_constraint_2_pi_mean, **{'system_episode_constraint_2' : system_episode_constraint_2_pi_mean, 'round' : t}})
+            # with open(f"{csv_save_dir}/rollout_mean_pi_constraint_2.csv", "a", newline="") as csvfile: 
+            #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['system_episode_constraint_2', 'round'])
+            #     csv_writer.writerow({**episode_constraint_2_pi_mean, **{'system_episode_constraint_2' : system_episode_constraint_2_pi_mean, 'round' : t}})
+
+
 
         round_completeion_time = datetime.now()
         print(f" >> Round {t} complete!")
@@ -362,7 +434,10 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     print(f" > Batch offline reinforcement learning complete")
     print(f" > Total execution time: {function_stop_time-function_start_time}")
 
-    return mean_policies, mean_g2_constraints
+    lambdas = [lambda_1, lambda_2]
+    mean_lambdas = [mean_lambda_1, mean_lambda_2]
+
+    return mean_policies, policies, mean_lambdas, lambdas
 
 
 def FittedQIteration(observation_spaces:dict,
@@ -371,7 +446,9 @@ def FittedQIteration(observation_spaces:dict,
                      dataset:dict, 
                      csv_save_dir:str,
                      config_args, 
-                     constraint:str="") -> dict:
+                     constraint:str="",
+                     lambda_1:float=None,
+                     lambda_2:float=None) -> dict:
     """
     Implementation of Fitted Q Iteration with function approximation for offline learning of a policy
     Note that this implementation utilizes an "actor-critic" approach to solve the RL problem
@@ -383,7 +460,9 @@ def FittedQIteration(observation_spaces:dict,
     :param dataset: Dictionary that maps each agent to its experience tuple
     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
     :param config_args: Configuration arguments used to set up the experiment
-    :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the policy
+    :param constraint: 'speed_overage', 'queue', or 'weighted_sum' defines how the target should be determined while learning the policy
+    :param lambda_1: Weight corresponidng to the G1 constraints, if constraint is 'weighted_sum' this must be provided
+    :param lambda_2: Weight corresponidng to the G2 constraints, if constraint is 'weighted_sum' this must be provided
     :returns A dictionary that maps each agent to its learned policy
     """
 
@@ -435,7 +514,7 @@ def FittedQIteration(observation_spaces:dict,
                     # Calculate max_a Q(s',a)
                     # NOTE: that the original FQI in the paper used min_a here but our constaint values are the negative version of theirs
                     # so we need to take max here
-                    target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
+                    target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1).values
                     
                     # Calculate the full TD target 
                     # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
@@ -448,8 +527,12 @@ def FittedQIteration(observation_spaces:dict,
                         # Use the "g2" constraint
                         td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
+                    elif (constraint == "weighted_sum"):
+                        # Use both g1 and g2 but weighted with lambda
+                        td_target = torch.Tensor(lambda_1 * s_g1s).to(device) + torch.Tensor(lambda_2 * s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
                     else: 
                         print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
+                        return {}
 
                 q_values = q_network[agent].forward(s_obses)
                 old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
@@ -697,7 +780,7 @@ def CalculateMeanPolicy(latest_learned_policy:dict,
                 _, _, old_policy_probs = mean_policy[agent].get_action(s_obses)
 
                 # Calculate the loss between the "old" mean policy and the target
-                loss = loss_fn(target, old_policy_probs)
+                loss = loss_fn(target, old_policy_probs)     # TODO: discuss loss function with chihui
                 losses[agent] = loss.item()
 
                 # Optimize the model 
@@ -764,7 +847,6 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
         losses[agent] = None
 
     loss_fn = nn.MSELoss() # TODO: should this be MSE or Cross Entropy?
-
 
     # For k = 1:K
     for global_step in range(config_args.total_timesteps):
@@ -889,13 +971,68 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
         
     return episode_rewards, episode_constraint_1, episode_constraint_2
 
-def PerformOfflineRollout(policy, mini_dataset)->float:
-    # TODO
-    pass
 
-def OnlineLambdaLearning(G_1, G_2, lambda_1_prev, lambda_2_prev)->(float, float):
-    # TODO
-    pass
+def PerformOfflineRollout(value_function:dict, mini_dataset:dict)->dict:
+    """
+    :param value_function: Dictionary that maps agents to the learned value function for a given constraint
+    :param mini_dataset: A subset of the larger dataset that contains experience tuples that are evaluated in the rollout
+            using the provided dataset
+            NOTE: This function assumes the dataset has been sampled such that mini_dataset contains lists of of experience tuples for each agent
+    :returns The cummulative return for all agents of the mini dataset according to the provided value functions 
+    """
+    
+    agents = list(value_function.keys())
+    cumulative_return = {agent:0.0 for agent in agents}
+
+    for agent in agents:
+        print(f"agent: {agent}")
+        # for experience_idx in range(len(mini_dataset[agent])):
+            # print(f" >>> len(mini_dataset[agent]): {len(mini_dataset[agent])}")
+            # print(f" >>> type mini_dataset[agent]: {type(mini_dataset[agent])}")
+            # print(f" >>> mini_dataset[agent]: {mini_dataset[agent]}")
+            # print(f" >>> mini_dataset[agent][experience_idx]: {mini_dataset[agent][experience_idx]}")
+        obses_array, actions_array, _, _, _, _ = mini_dataset[agent]
+
+        # Get the max_a Q(s,a) for the observation
+        value = torch.max(value_function[agent].forward(obses_array), dim=1).values
+        print(f" >>> forward(obses): {value}")
+        # This is the value of the state that was actually selected in the experience tuple
+        other_value = value_function[agent].forward(obses_array).gather(1, torch.LongTensor(actions_array).view(-1,1).to(device)).squeeze()
+        print(f" >>> forward(obses).gather(1, torch.LongTensor(actions).view(-1,1).to(device)).squeeze(): {other_value}")
+
+        cumulative_return[agent] = sum(value)
+
+    return cumulative_return
+
+def OnlineLambdaLearning(lambda_1_prev:float, 
+                         lambda_2_prev:float, 
+                         g1_returns:dict, 
+                         g2_returns:dict)->(float, float):
+    """
+    :param 
+    :param 
+    :param 
+    :param
+    :returns
+    """
+
+    # Calculate the accumulated returns (accross all agents)
+    print(f" >>>>> g1_returns: {g1_returns}")
+    print(f" >>>>> g2_returns: {g2_returns}")
+    cumulative_g1_returns = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()
+    cumulative_g2_returns = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()
+    print(f" >>>>> cumulative_g1_returns: {cumulative_g1_returns}")
+    print(f" >>>>> cumulative_g2_returns: {cumulative_g2_returns}")
+
+    n = 0.01 # TODO: may need to change
+
+    exp_g1_returns = np.exp(n * cumulative_g1_returns)
+    exp_g2_returns = np.exp(n * cumulative_g2_returns)
+
+    lambda_1 = lambda_1_prev * exp_g1_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)
+    lambda_2 = lambda_2_prev * exp_g2_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)
+
+    return lambda_1, lambda_2
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 if __name__ == "__main__":
@@ -924,6 +1061,7 @@ if __name__ == "__main__":
     csv_save_dir = f"{save_dir}/csv" 
     os.makedirs(f"{save_dir}/policies/mean")
     os.makedirs(f"{save_dir}/constraints/queue/mean")
+    os.makedirs(f"{save_dir}/constraints/speed_overage/mean")
     os.makedirs(csv_save_dir)
 
     print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
@@ -1082,12 +1220,12 @@ if __name__ == "__main__":
         Essentially we want to evaluate the new policy, E[pi] and the constraint function E[G]
     """
     perform_rollout_comparisons = True
-    policy_expectation, constraint_expectation = OfflineBatchRL(env,
+    mean_policies, policies, mean_lambdas, lambdas = OfflineBatchRL(env,
                                                                 dataset, 
                                                                 perform_rollout_comparisons,
                                                                 args, 
                                                                 save_dir,
                                                                 csv_save_dir,
-                                                                max_num_rounds=10,
-                                                                constraint="queue")
+                                                                max_num_rounds=1)
+                                                                #constraint="queue")
 
