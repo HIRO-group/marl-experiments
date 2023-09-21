@@ -7,9 +7,9 @@ from torch.distributions.categorical import Categorical
 import numpy as np
 
 # TODO: fix cuda...
-# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-device = 'cpu'
-# print(f">>>> DEVICE: {device}")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# device = 'cpu'
+print(f">>>> ACTOR CRITIC DEVICE: {device}")
 
 # TODO: use this file across all MARL experiment files
 class QNetwork(nn.Module):
