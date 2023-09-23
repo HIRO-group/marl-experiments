@@ -81,7 +81,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     :param episode_steps: number of steps to take in each episode
     :returns a dictionary that maps each agent to 
     """
-    print(" >> Generating dataset")
+    print(f" >> Generating dataset with {num_episodes} episodes of {episode_steps} steps")
     start_time = datetime.now()
 
     DATASET_SIZE = num_episodes*episode_steps
@@ -126,13 +126,14 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
             if np.prod(list(dones.values())):
                 # Start the next episode
+                print(f" >>> Episode complete at {step} steps, going to next episode")
                 break
 
             # Caclulate constraints and add the experience to the dataset
             for agent in agents:
                  max_speed_observed_by_agent = next_obses[agent][-1]
                  constraint_1[agent] = CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
-                 constraint_2[agent] = rewards[agent]
+                 constraint_2[agent] = rewards[agent]   # NOTE: This assumes that the environment was configured with the "queue" reward
                  dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
 
             obses = next_obses
@@ -181,10 +182,18 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     action_spaces = env.action_spaces
     observation_spaces = env.observation_spaces
 
+    # There are two mean constraint value functions to track so create some strings to append to the corresponding file names for each constraint
+    mean_constraint_suffixes = ['g1', 'g2'] 
+
+
     # Initialize csv files
-    with open(f"{csv_save_dir}/FQE_loss.csv", "w", newline="") as csvfile:
+    with open(f"{csv_save_dir}/FQE_loss_{mean_constraint_suffixes[0]}.csv", "w", newline="") as csvfile:
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample','global_step'])
         csv_writer.writeheader()
+
+    with open(f"{csv_save_dir}/FQE_loss_{mean_constraint_suffixes[1]}.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample','global_step'])
+        csv_writer.writeheader()        
 
     with open(f"{csv_save_dir}/FQI_actor_loss.csv", "w", newline="") as csvfile:
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
@@ -194,7 +203,11 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['global_step', 'round'])
         csv_writer.writeheader()
 
-    with open(f"{csv_save_dir}/mean_constraint_loss.csv", "w", newline="") as csvfile:
+    with open(f"{csv_save_dir}/mean_constraint_loss_{mean_constraint_suffixes[0]}.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['global_step', 'round'])
+        csv_writer.writeheader()
+
+    with open(f"{csv_save_dir}/mean_constraint_loss_{mean_constraint_suffixes[1]}.csv", "w", newline="") as csvfile:
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['global_step', 'round'])
         csv_writer.writeheader()
 
@@ -254,6 +267,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     policies,
                                     dataset, 
                                     csv_save_dir,
+                                    mean_constraint_suffixes[0],
                                     config_args, 
                                     constraint="speed_overage")
         
@@ -270,6 +284,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     policies,
                                     dataset, 
                                     csv_save_dir,
+                                    mean_constraint_suffixes[1],
                                     config_args, 
                                     constraint="queue")
         
@@ -304,6 +319,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                       t,
                                                       dataset,
                                                       csv_save_dir,
+                                                      mean_constraint_suffixes[0],
                                                       config_args)
 
         # Save the mean value function each round
@@ -321,6 +337,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                       t,
                                                       dataset,
                                                       csv_save_dir,
+                                                      mean_constraint_suffixes[1],
                                                       config_args)
 
         # Save the mean value function each round
@@ -338,6 +355,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # NOTE: The returns here are dictionaries that map agents to their return
         g1_returns = PerformOfflineRollout(G1_pi, rollout_mini_dataset)
         g2_returns = PerformOfflineRollout(G2_pi, rollout_mini_dataset)
+        # TODO: perform some kind of similar rollout for the dataset policies to compare?
+
 
         # TODO: double check that we're ok seeing the updated version of lambda in each round 
         # (i.e. what round X produces rather than the values of lambda that were using in round X)
@@ -346,8 +365,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         if (t > 1):
             # On the first round, the expected value of lambda was set as the initial value of lambda
-            mean_lambda_1 = 1/t*(lambda_1 + mean_lambda_1)
-            mean_lambda_2 = 1/t*(lambda_2 + mean_lambda_2)
+            mean_lambda_1 = 1/t*(lambda_1 + ((t-1) * mean_lambda_1))
+            mean_lambda_2 = 1/t*(lambda_2 + ((t-1) * mean_lambda_2))
 
         # Save the rollout returns and the updated lambdas
         with open(f"{csv_save_dir}/rollouts.csv", "a", newline="") as csvfile:
@@ -370,7 +389,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
             new_row['mean_lambda_2'] = mean_lambda_2
 
             csv_writer.writerow({**new_row})
-            
         round_completeion_time = datetime.now()
         print(f" >> Round {t} of {max_num_rounds} complete!")
         print(f" >> Round execution time: {round_completeion_time-round_start_time}")
@@ -536,6 +554,7 @@ def FittedQEvaluation(observation_spaces:dict,
                      policy:dict,
                      dataset:dict, 
                      csv_save_dir:str,
+                     csv_file_suffix:str,
                      config_args, 
                      constraint:str="") -> dict:
     """
@@ -549,6 +568,7 @@ def FittedQEvaluation(observation_spaces:dict,
     :param policy: Dictionary that maps an agent to its policy to be evaluated
     :param dataset: Dictionary that maps each agent to its experience tuple
     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
+    :param csv_file_suffix: String to append to the name of the csv file to differentiate between which mean constraint value function is being evaluated
     :param config_args: Configuration arguments used to set up the experiment
     :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the value function
     :returns A dictionary that maps each agent to its learned constraint value function
@@ -607,11 +627,11 @@ def FittedQEvaluation(observation_spaces:dict,
                     # Calculate the full TD target 
                     # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
-                    if (constraint == "queue"):
+                    if (constraint == "speed_overage"):
                         # Use the "g1" constraint
                         td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
-                    elif (constraint == "speed_overage"):
+                    elif (constraint == "queue"):
                         # Use the "g2" constraint
                         td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
@@ -642,7 +662,7 @@ def FittedQEvaluation(observation_spaces:dict,
             eval_q_s_a = q_network[agents[0]].forward(eval_obses).squeeze()
             first_agent_first_action_value = eval_q_s_a[0].item()   # cast the tensor object to a float
 
-            with open(f"{csv_save_dir}/FQE_loss.csv", "a", newline="") as csvfile:
+            with open(f"{csv_save_dir}/FQE_loss_{csv_file_suffix}.csv", "a", newline="") as csvfile:
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample', 'global_step'])
                 csv_writer.writerow({**losses, **{'Q(s,a) Sample' : first_agent_first_action_value,
                                                             'global_step' : global_step}})
@@ -755,6 +775,7 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
                             round:int,   
                             dataset:dict,
                             csv_save_dir:str,
+                            csv_file_suffix:str,
                             config_args) -> dict:
     """
     Calculate the "mean" constraint value function using the previous mean constraint value function and the last 
@@ -768,10 +789,11 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
     :param round: The current round of batch offline RL being performed
     :param dataset: Dictionary that maps agents to a collection of experience tuples
     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
+    :param csv_file_suffix: String to append to the name of the csv file to differentiate between which mean constraint value function is being evaluated
     :param config_args: Config arguments used to set up the experiment
     :returns a Dictionary that maps each agent to its expectation E_t[g] = 1/t*(g_t + (t-1)*E_t-1[g])
     """
-    print(f" >> Evaluating Mean Constraint")
+    print(f" >> Evaluating Mean Constraint: '{csv_file_suffix}'")
     start_time = datetime.now()
 
     mean_constraint = {}    # Dictionary that maps agents to the "mean" constraint value function for this round
@@ -831,7 +853,7 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
         # Periodically log data to CSV
         if (global_step % 1000 == 0):
 
-            with open(f"{csv_save_dir}/mean_constraint_loss.csv", "a", newline="") as csvfile:
+            with open(f"{csv_save_dir}/mean_constraint_loss_{csv_file_suffix}.csv", "a", newline="") as csvfile:
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['global_step', 'round'])
                 csv_writer.writerow({**losses, **{'global_step' : global_step, 'round' : round}})
 
@@ -932,13 +954,13 @@ def PerformOfflineRollout(value_function:dict, mini_dataset:dict)->dict:
         obses_array, actions_array, _, _, _, _ = mini_dataset[agent]
 
         # Get the max_a Q(s,a) for the observation
-        value = torch.max(value_function[agent].forward(obses_array), dim=1).values
+        values = torch.max(value_function[agent].forward(obses_array), dim=1).values
 
         # This is the value of the state that was actually selected in the experience tuple
         # other_value = value_function[agent].forward(obses_array).gather(1, torch.LongTensor(actions_array).view(-1,1).to(device)).squeeze()
         
         # Add up the max values of all states from the mini dataset
-        cumulative_return[agent] = sum(value)/(len(mini_dataset[agent]))
+        cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
 
     return cumulative_return
 
@@ -964,7 +986,7 @@ def OnlineLambdaLearning(lambda_1_prev:float,
     # print(f" >>>>> cumulative_g2_returns: {cumulative_g2_returns}")
 
     # n = 0.01 # TODO: may need to change
-    n = 0.0001 # TODO: may need to change
+    n = 0.00001 # TODO: may need to change
 
     exp_g1_returns = np.exp(n * cumulative_g1_returns)
     exp_g2_returns = np.exp(n * cumulative_g2_returns)
@@ -1031,7 +1053,7 @@ if __name__ == "__main__":
                                 use_gui=args.sumo_gui,
                                 max_green=args.max_green,
                                 min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
+                                num_seconds=args.sumo_seconds,  # TODO: for some reason, the env is finishing after 1000 seconds
                                 add_system_info=True,
                                 add_per_agent_info=True,
                                 reward_fn=args.sumo_reward,
@@ -1107,7 +1129,7 @@ if __name__ == "__main__":
 
 
     list_of_policies.append(queue_model_policies)
-    list_of_policies.append(speed_overage_model_policies)
+    # list_of_policies.append(speed_overage_model_policies)
 
     # Seed the env
     env.reset(seed=args.seed)
@@ -1169,5 +1191,4 @@ if __name__ == "__main__":
                                                                 save_dir,
                                                                 csv_save_dir,
                                                                 max_num_rounds=10)
-                                                                #constraint="queue")
 
