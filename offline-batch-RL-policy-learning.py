@@ -150,6 +150,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 def OfflineBatchRL(env:sumo_rl.parallel_env,
                     dataset: dict,
                     perform_rollout_comparisons:bool,
+                    dataset_policies:list,
                     config_args,
                     nn_save_dir:str,
                     csv_save_dir:str,
@@ -165,6 +166,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     :param dataset: Dictionary that maps each agent to its experience tuple
     :param perform_rollout_comparisons: Boolean indicating if a rollout should be performed at the end of each round to
       compare the dataset policy with the mean policy
+    :param dataset_policies: List of policies that were used to generate the dataset for this experiment (used for online evaluation)
     :param config_args: Configuration arguments used to set up the experiment
     :param nn_save_dir: Directory in which to save the models each round
     :pram csv_save_dir: Directory in which to save the csv file
@@ -219,6 +221,29 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                         ['lambda_1', 'lambda_2', 'mean_lambda_1', 'mean_lambda_2'])
         csv_writer.writeheader()
 
+        
+    with open(f"{csv_save_dir}/online_rollouts.csv", "w", newline="") as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + 
+                                                        [agent + '_mean_policy_g1_return' for agent in agents] + 
+                                                        ['mean_policy_system_return_g1'] + 
+                                                        [agent + '_mean_policy_g2_return' for agent in agents] + 
+                                                        ['mean_policy_system_return_g2'] +
+                                                        
+                                                        [agent + '_current_policy_g1_return' for agent in agents] +
+                                                        ['current_policy_system_return_g1'] + 
+                                                        [agent + '_current_policy_g2_return' for agent in agents] + 
+                                                        ['current_policy_system_return_g2'] +
+                                                        
+                                                        [agent + '_threshold_policy_g1_return' for agent in agents] +
+                                                        ['threshold_policy_system_return_g1'] + 
+                                                        [agent + '_threshold_policy_g2_return' for agent in agents] + 
+                                                        ['threshold_policy_system_return_g2'] +
+                                                        
+                                                        [agent + '_queue_policy_g1_return' for agent in agents] +
+                                                        ['queue_policy_system_return_g1'] + 
+                                                        [agent + '_queue_policy_g2_return' for agent in agents] + 
+                                                        ['queue_policy_system_return_g2'])
+        csv_writer.writeheader()
 
     # Initialize the mean networks and the rollout datasets
     prev_mean_policies = {}
@@ -389,6 +414,76 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
             new_row['mean_lambda_2'] = mean_lambda_2
 
             csv_writer.writerow({**new_row})
+
+        # Now run some online rollouts to compare performance between the learned policy and the dataset policy
+        print(f" >> Performing online rollout for mean policy")
+        mean_policy_sys_return, mean_policy_g1_return, mean_policy_g2_return = PerformRollout(env, prev_mean_policies, config_args)
+        
+        print(f" >> Performing online rollout for current learned policy")
+        current_policy_sys_return, current_policy_g1_return, current_policy_g2_return = PerformRollout(env, policies, config_args)
+        
+        # TODO: make this more generic
+        threshold_policy = dataset_policies[0]
+        print(f" >> Performing online rollout for speed overage policy")
+        threshold_policy_sys_return, threshold_policy_g1_return, threshold_policy_g2_return = PerformRollout(env, threshold_policy, config_args)
+        
+        queue_policy = dataset_policies[1]
+        print(f" >> Performing online rollout for queue policy")
+        queue_policy_sys_return, queue_policy_g1_return, queue_policy_g2_return = PerformRollout(env, queue_policy, config_args)
+
+        # Log the online rollout results
+        with open(f"{csv_save_dir}/online_rollouts.csv", "a", newline="") as csvfile:
+            csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + 
+                                                        [agent + '_mean_policy_g1_return' for agent in agents] + 
+                                                        ['mean_policy_system_return_g1'] + 
+                                                        [agent + '_mean_policy_g2_return' for agent in agents] + 
+                                                        ['mean_policy_system_return_g2'] +
+                                                        
+                                                        [agent + '_current_policy_g1_return' for agent in agents] +
+                                                        ['current_policy_system_return_g1'] + 
+                                                        [agent + '_current_policy_g2_return' for agent in agents] + 
+                                                        ['current_policy_system_return_g2'] +
+                                                        
+                                                        [agent + '_threshold_policy_g1_return' for agent in agents] +
+                                                        ['threshold_policy_system_return_g1'] + 
+                                                        [agent + '_threshold_policy_g2_return' for agent in agents] + 
+                                                        ['threshold_policy_system_return_g2'] +
+                                                        
+                                                        [agent + '_queue_policy_g1_return' for agent in agents] +
+                                                        ['queue_policy_system_return_g1'] + 
+                                                        [agent + '_queue_policy_g2_return' for agent in agents] + 
+                                                        ['queue_policy_system_return_g2'])
+            new_row = {}
+            new_row['round'] = t
+            for agent in agents:
+                new_row[agent + '_mean_policy_g1_return'] = mean_policy_g1_return[agent]
+                new_row[agent + '_mean_policy_g2_return'] = mean_policy_g2_return[agent]
+            
+                new_row[agent + '_current_policy_g1_return'] = current_policy_g1_return[agent]
+                new_row[agent + '_current_policy_g2_return'] = current_policy_g2_return[agent]
+
+                new_row[agent + '_threshold_policy_g1_return'] = threshold_policy_g1_return[agent]
+                new_row[agent + '_threshold_policy_g2_return'] = threshold_policy_g2_return[agent]
+
+                new_row[agent + '_queue_policy_g1_return'] = queue_policy_g1_return[agent]
+                new_row[agent + '_queue_policy_g2_return'] = queue_policy_g2_return[agent]
+
+
+            new_row['mean_policy_system_return_g1'] = sum(mean_policy_g1_return.values())
+            new_row['mean_policy_system_return_g2'] = sum(mean_policy_g2_return.values())
+            
+            new_row['current_policy_system_return_g1'] = sum(current_policy_g1_return.values())
+            new_row['current_policy_system_return_g2'] = sum(current_policy_g2_return.values())
+
+            new_row['threshold_policy_system_return_g1'] = sum(threshold_policy_g1_return.values())
+            new_row['threshold_policy_system_return_g2'] = sum(threshold_policy_g2_return.values())
+
+            new_row['queue_policy_system_return_g1'] = sum(queue_policy_g1_return.values())
+            new_row['queue_policy_system_return_g2'] = sum(queue_policy_g2_return.values())
+
+            csv_writer.writerow({**new_row})
+
+        # Capture the round execution time
         round_completeion_time = datetime.now()
         print(f" >> Round {t} of {max_num_rounds} complete!")
         print(f" >> Round execution time: {round_completeion_time-round_start_time}")
@@ -509,7 +604,7 @@ def FittedQIteration(observation_spaces:dict,
 
 
                 # Actor training
-                a, log_pi, action_probs = actor_network[agent].get_action(s_obses)
+                a, log_pi, action_probs = actor_network[agent].to(device).get_action(s_obses)
 
                 # Compute the loss for this agent's actor
                 # NOTE: Actor uses cross-entropy loss function where
@@ -895,13 +990,13 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
     actions = {agent: None for agent in agents}
 
     # Dictionary that maps the each agent to its cumulative reward each episode
-    episode_rewards = {agent: 0 for agent in agents}            
+    episode_rewards = {agent: 0.0 for agent in agents}            
 
     # Maps each agent to its MAX SPEED OVERAGE for this step        
-    episode_constraint_1 = {agent : 0 for agent in agents}  
+    episode_constraint_1 = {agent : 0.0 for agent in agents}  
     
     # Maps each agent to the accumulated NUBMER OF CARS STOPPED for episode
-    episode_constraint_2 = {agent : 0 for agent in agents}  
+    episode_constraint_2 = {agent : 0.0 for agent in agents}  
 
     # Initialize the env
     obses, _ = env.reset()
@@ -911,7 +1006,7 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
         # Populate the action dictionary
         for agent in agents:
             # Only use optimal actions according to the policy
-            action, _, _ = policy[agent].get_action(obses[agent])
+            action, _, _ = policy[agent].to(device).get_action(obses[agent])
             actions[agent] = action.detach().cpu().numpy()
 
         # Apply all actions to the env
@@ -1128,8 +1223,8 @@ if __name__ == "__main__":
             print(" > Loading NN from file: {} for dataset generation".format(nn_speed_overage_file))
 
 
+    list_of_policies.append(speed_overage_model_policies)
     list_of_policies.append(queue_model_policies)
-    # list_of_policies.append(speed_overage_model_policies)
 
     # Seed the env
     env.reset(seed=args.seed)
@@ -1187,6 +1282,7 @@ if __name__ == "__main__":
     mean_policies, policies, mean_lambdas, lambdas = OfflineBatchRL(env,
                                                                 dataset, 
                                                                 perform_rollout_comparisons,
+                                                                list_of_policies,
                                                                 args, 
                                                                 save_dir,
                                                                 csv_save_dir,
