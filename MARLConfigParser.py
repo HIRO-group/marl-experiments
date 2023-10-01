@@ -85,6 +85,8 @@ class MARLConfigParser():
         # Configuration parameters for analyzing sumo env
         self.parser.add_argument("--analysis-steps", dest="analysis_steps", type=int, default=500, required=True, 
                             help="The number of time steps at which we want to investigate the perfomance of the algorithm. E.g. display how the training was going at the 10,000 checkpoint. Note there must be a nn .pt file for each agent at this step.\n")
+        self.parser.add_argument("--analysis-training-round", dest="analysis_training_round", type=int, default=10, required=False, 
+                            help="The training round from batch offline RL at which we want to investigate the perfomance of the algorithm. E.g. display how the policies were after 5 rounds of training. Note there must be a nn .pt file for each agent at this training round.\n")        
         self.parser.add_argument("--nn-directory", dest="nn_directory", type=str, default=None, required=False, 
                             help="The directory containing the nn .pt files to load for analysis.\n")
         self.parser.add_argument("--nn-queue-directory", dest="nn_queue_directory", type=str, default=None, required=True, 

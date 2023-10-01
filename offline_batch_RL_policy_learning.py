@@ -1,5 +1,5 @@
 """
-offline-batch-RL-policy-learning.py
+offline_batch_RL_policy_learning.py
 
 Description:
     Offline batch RL for learning a policy subject to constraints. The idea here is that we can utilize experiences from various 
@@ -7,7 +7,7 @@ Description:
     This algorithm is essentially decentralized
 
 Usage:
-    python offline-batch-RL-policy-learning.py -c experiments/sumo-2x2-ac-independent.config    
+    python offline_batch_RL_policy_learning.py -c experiments/sumo-2x2-ac-independent.config    
 
 References:
     https://arxiv.org/pdf/1903.08738.pdf
