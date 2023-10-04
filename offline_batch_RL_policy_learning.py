@@ -146,6 +146,71 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
     return dataset
 
+def NormalizeDataset(dataset:dict,
+                     constraint_ratio:float=0.25) -> dict:
+    """
+    Function for normalizing the dataset so that the values of one constraint do not normalize the other
+    :param 
+    :param 
+    """
+    print(f" > Normalizing dataset constraint values")
+    # Intialize dataset
+    normalized_dataset = {}
+
+    for agent in dataset.keys():
+        
+        # Initialize constraint bounds
+        C_g1 = 0.0
+        C_g2 = 0.0
+        
+        G_1 = 0.0
+        G_2 = 0.0
+
+        normalized_g1s = []
+        normalized_g2s = []
+
+        # Number of experience tuples for this agent
+        n = len(dataset[agent].buffer)
+        print(f" > Agent '{agent}' buffer size: {n} ")
+
+        normalized_dataset[agent] = Dataset(n)
+        
+        # Calculate the bounds for the g1 and g2 constraints
+        for i in range(n):
+            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
+            C_g1 += s_g1s
+            C_g2 += s_g2s
+
+        C_g1 = C_g1 / n * (1.0 + constraint_ratio)
+        # C_g2 = C_g2 / n * (1.0 - constraint_ratio)    
+
+        # Now apply the bounds to the g1 and g2 observations
+        for i in range(n):
+            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
+            g1_normalized = min(C_g1, s_g1s) + C_g1
+            normalized_g1s.append(g1_normalized)
+            G_1 += g1_normalized
+
+            # g2_normalized = min(C_g2, s_g2s) + C_g2   # Remove the constraint on g2
+            g2_normalized = s_g2s
+            normalized_g2s.append(g2_normalized)
+            G_2 += g2_normalized
+            
+        for i in range(n):
+            s_obses, s_actions, s_next_obses, _, _, s_dones = dataset[agent].buffer[i]
+            
+            # Calculate normalized g1 and g2
+            # NOTE: weirdly, the best response we have seen (both g1 and g2 reaching maximal returns) occured 
+            # without this step... 
+            # Not sure why
+            g1_n = normalized_g1s[i]/G_1
+            g2_n = normalized_g2s[i]/G_2
+
+            # Add it to the new dataset
+            normalized_dataset[agent].put((s_obses, s_actions, s_next_obses, g1_n, g2_n, s_dones))
+
+    return normalized_dataset
+
 
 def OfflineBatchRL(env:sumo_rl.parallel_env,
                     dataset: dict,
@@ -256,7 +321,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         prev_mean_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
         prev_g1_constraints[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
         prev_g2_constraints[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-        rollout_mini_dataset[agent] = dataset[agent].sample(config_args.batch_size) # TODO: how big should this be? Currently set to 32
+        rollout_mini_dataset[agent] = dataset[agent].sample(1000) # TODO: config
 
     # Initialize both lambdas equally 
     lambda_1 = 1.0/2.0
@@ -378,8 +443,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # Perform offline rollouts using each value function and a small portion of the provided dataset
         # NOTE: The returns here are dictionaries that map agents to their return
-        g1_returns = PerformOfflineRollout(G1_pi, rollout_mini_dataset)
-        g2_returns = PerformOfflineRollout(G2_pi, rollout_mini_dataset)
+        g1_returns = PerformOfflineRollout(G1_pi, policies, rollout_mini_dataset)
+        g2_returns = PerformOfflineRollout(G2_pi, policies, rollout_mini_dataset)
         # TODO: perform some kind of similar rollout for the dataset policies to compare?
 
 
@@ -482,6 +547,37 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
             new_row['queue_policy_system_return_g2'] = sum(queue_policy_g2_return.values())
 
             csv_writer.writerow({**new_row})
+
+
+        # # Adjust lambda using ONLINE rollout
+        # lambda_1, lambda_2 = OnlineLambdaLearning(lambda_1, lambda_2, current_policy_g1_return, current_policy_g2_return)
+
+        # if (t > 1):
+        #     # On the first round, the expected value of lambda was set as the initial value of lambda
+        #     mean_lambda_1 = 1/t*(lambda_1 + ((t-1) * mean_lambda_1))
+        #     mean_lambda_2 = 1/t*(lambda_2 + ((t-1) * mean_lambda_2))
+
+        # # Save the rollout returns and the updated lambdas
+        # with open(f"{csv_save_dir}/rollouts.csv", "a", newline="") as csvfile:
+        #     csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + [agent + '_return_g1' for agent in agents] + 
+        #                                                     ['system_return_g1'] + 
+        #                                                     [agent + '_return_g2' for agent in agents] + 
+        #                                                     ['system_return_g2'] +
+        #                                                     ['lambda_1', 'lambda_2', 'mean_lambda_1', 'mean_lambda_2'])
+        #     new_row = {}
+        #     new_row['round'] = t
+        #     for agent in agents:
+        #         new_row[agent + '_return_g1'] = g1_returns[agent].item()
+        #     new_row['system_return_g1'] = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()
+        #     for agent in agents:
+        #         new_row[agent + '_return_g2'] = g2_returns[agent].item()
+        #     new_row['system_return_g2'] = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()
+        #     new_row['lambda_1'] = lambda_1
+        #     new_row['lambda_2'] = lambda_2
+        #     new_row['mean_lambda_1'] = mean_lambda_1
+        #     new_row['mean_lambda_2'] = mean_lambda_2
+
+        #     csv_writer.writerow({**new_row})
 
         # Capture the round execution time
         round_completeion_time = datetime.now()
@@ -1033,7 +1129,7 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
     return episode_rewards, episode_constraint_1, episode_constraint_2
 
 
-def PerformOfflineRollout(value_function:dict, mini_dataset:dict)->dict:
+def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)->dict:
     """
     :param value_function: Dictionary that maps agents to the learned value function for a given constraint
     :param mini_dataset: A subset of the larger dataset that contains experience tuples that are evaluated in the rollout
@@ -1046,14 +1142,18 @@ def PerformOfflineRollout(value_function:dict, mini_dataset:dict)->dict:
     cumulative_return = {agent:0.0 for agent in agents}
 
     for agent in agents:
-        obses_array, actions_array, _, _, _, _ = mini_dataset[agent]
+        obses_array, _, _, _, _, _ = mini_dataset[agent]
 
         # Get the max_a Q(s,a) for the observation
-        values = torch.max(value_function[agent].forward(obses_array), dim=1).values
+        # TODO: update to not be max?
+        # values = torch.max(value_function[agent].forward(obses_array), dim=1).values
 
-        # This is the value of the state that was actually selected in the experience tuple
-        # other_value = value_function[agent].forward(obses_array).gather(1, torch.LongTensor(actions_array).view(-1,1).to(device)).squeeze()
-        
+        actions_from_policy, _, _ = policies[agent].to(device).get_action(obses_array)
+        # print(f"actions_from_policy: {actions_from_policy}")
+        # print(f"value_function[agent].forward(obses_array): {value_function[agent].forward(obses_array)}")
+        # Evaluate the actions that were selected by the policies from this observation
+        values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
+        # print(f"values: {values}")
         # Add up the max values of all states from the mini dataset
         cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
 
@@ -1072,19 +1172,25 @@ def OnlineLambdaLearning(lambda_1_prev:float,
     :returns Updated values for lambda1 and lambda2
     """
 
-    # Calculate the accumulated returns (accross all agents)
+    # Calculate the accumulated returns (averaged over all agents)
     # print(f" >>>>> g1_returns: {g1_returns}")
     # print(f" >>>>> g2_returns: {g2_returns}")
-    cumulative_g1_returns = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()
-    cumulative_g2_returns = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()
+    num_agents = len(g1_returns.keys()) # TODO: add check to make sure g1 and g2 num agents the same
+    avg_cumulative_g1_returns = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy() / num_agents
+    avg_cumulative_g2_returns = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy() / num_agents
     # print(f" >>>>> cumulative_g1_returns: {cumulative_g1_returns}")
     # print(f" >>>>> cumulative_g2_returns: {cumulative_g2_returns}")
 
+    # Lambda learning rate
     # n = 0.01 # TODO: may need to change
-    n = 0.00001 # TODO: may need to change
+    # n = 0.00001 # TODO: may need to change
+    n = 0.001 # TODO: may need to change
 
-    exp_g1_returns = np.exp(n * cumulative_g1_returns)
-    exp_g2_returns = np.exp(n * cumulative_g2_returns)
+    exp_g1_returns = np.exp(n * avg_cumulative_g1_returns)
+    exp_g2_returns = np.exp(n * avg_cumulative_g2_returns)
+
+    # print(f" >>>> exp_g1_returns: {exp_g1_returns}")
+    # print(f" >>>> exp_g2_returns: {exp_g2_returns}")
 
     lambda_1 = lambda_1_prev * exp_g1_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)
     lambda_2 = lambda_2_prev * exp_g2_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)
@@ -1272,6 +1378,11 @@ if __name__ == "__main__":
 
         print(f" > Dataset size: {len(dataset[eg_agent].buffer)} per agent")
 
+    # Normalize the constraint values in the dataset
+    # constraint_ratio = 0.25  # TODO: config
+    # constraint_ratio = -0.25
+    constraint_ratio = 0.0
+    normalized_dataset = NormalizeDataset(dataset, constraint_ratio=constraint_ratio)
 
     """
     Step 2:
@@ -1280,7 +1391,7 @@ if __name__ == "__main__":
     """
     perform_rollout_comparisons = True
     mean_policies, policies, mean_lambdas, lambdas = OfflineBatchRL(env,
-                                                                dataset, 
+                                                                normalized_dataset, 
                                                                 perform_rollout_comparisons,
                                                                 list_of_policies,
                                                                 args, 
