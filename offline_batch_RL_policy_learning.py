@@ -157,6 +157,9 @@ def NormalizeDataset(dataset:dict,
     # Intialize dataset
     normalized_dataset = {}
 
+    total_c_g1 = 0.0
+    total_c_g2 = 0.0
+
     for agent in dataset.keys():
         
         # Initialize constraint bounds
@@ -187,12 +190,13 @@ def NormalizeDataset(dataset:dict,
         # Now apply the bounds to the g1 and g2 observations
         for i in range(n):
             s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
-            g1_normalized = min(C_g1, s_g1s) + C_g1
+            
+            g1_normalized = min(C_g1, s_g1s) - C_g1
             normalized_g1s.append(g1_normalized)
             G_1 += g1_normalized
 
-            # g2_normalized = min(C_g2, s_g2s) + C_g2   # Remove the constraint on g2
-            g2_normalized = s_g2s
+            # g2_normalized = min(C_g2, s_g2s) - C_g2   
+            g2_normalized = s_g2s # No constraint for g2
             normalized_g2s.append(g2_normalized)
             G_2 += g2_normalized
             
@@ -203,11 +207,24 @@ def NormalizeDataset(dataset:dict,
             # NOTE: weirdly, the best response we have seen (both g1 and g2 reaching maximal returns) occured 
             # without this step... 
             # Not sure why
-            g1_n = normalized_g1s[i]/G_1
-            g2_n = normalized_g2s[i]/G_2
+            g1_n = normalized_g1s[i]/abs(G_1)
+            if g1_n > 0.0:
+                print(f"ERROR: normalized g1 = {g1_n}, algorithm assumes g1 < 0")
+                sys.exit()
+
+            g2_n = normalized_g2s[i]/abs(G_2)
+            if g2_n > 0.0:
+                print(f"ERROR: normalized g2 = {g2_n}, algorithm assumes g2 < 0")
+                sys.exit()
+            
+        
 
             # Add it to the new dataset
             normalized_dataset[agent].put((s_obses, s_actions, s_next_obses, g1_n, g2_n, s_dones))
+
+        total_c_g1 += C_g1
+        total_c_g2 += C_g2
+    print(f" >>>> total_c_g1 = {total_c_g1}    total_c_g2 = {total_c_g2}")
 
     return normalized_dataset
 
@@ -321,7 +338,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         prev_mean_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
         prev_g1_constraints[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
         prev_g2_constraints[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-        rollout_mini_dataset[agent] = dataset[agent].sample(1000) # TODO: config
+        # rollout_mini_dataset[agent] = dataset[agent].sample(1000) # TODO: config  
+        rollout_mini_dataset[agent] = dataset[agent].sample(50000)
 
     # Initialize both lambdas equally 
     lambda_1 = 1.0/2.0
@@ -443,7 +461,10 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # Perform offline rollouts using each value function and a small portion of the provided dataset
         # NOTE: The returns here are dictionaries that map agents to their return
+        print(f">>> EVALUATING G1_pi IN OFFLINE ROLLOUT")
         g1_returns = PerformOfflineRollout(G1_pi, policies, rollout_mini_dataset)
+
+        print(f">>> EVALUATING G2_pi IN OFFLINE ROLLOUT")
         g2_returns = PerformOfflineRollout(G2_pi, policies, rollout_mini_dataset)
         # TODO: perform some kind of similar rollout for the dataset policies to compare?
 
@@ -1153,9 +1174,10 @@ def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)
         # print(f"value_function[agent].forward(obses_array): {value_function[agent].forward(obses_array)}")
         # Evaluate the actions that were selected by the policies from this observation
         values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
-        # print(f"values: {values}")
+        # print(f" >>>>>> values: {values}")
         # Add up the max values of all states from the mini dataset
         cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
+        print(f" >>>> cumulative_return for agent '{agent}': {cumulative_return[agent]}")
 
     return cumulative_return
 
@@ -1194,6 +1216,10 @@ def OnlineLambdaLearning(lambda_1_prev:float,
 
     lambda_1 = lambda_1_prev * exp_g1_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)
     lambda_2 = lambda_2_prev * exp_g2_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)
+
+    # Don't let lambda be 0.0
+    lambda_1 = max(0.00001, lambda_1)
+    lambda_2 = max(0.00001, lambda_2)
 
     return lambda_1, lambda_2
 
@@ -1379,9 +1405,9 @@ if __name__ == "__main__":
         print(f" > Dataset size: {len(dataset[eg_agent].buffer)} per agent")
 
     # Normalize the constraint values in the dataset
-    # constraint_ratio = 0.25  # TODO: config
+    constraint_ratio = 0.25  # TODO: config
     # constraint_ratio = -0.25
-    constraint_ratio = 0.0
+    # constraint_ratio = 0.0
     normalized_dataset = NormalizeDataset(dataset, constraint_ratio=constraint_ratio)
 
     """
@@ -1397,5 +1423,5 @@ if __name__ == "__main__":
                                                                 args, 
                                                                 save_dir,
                                                                 csv_save_dir,
-                                                                max_num_rounds=10)
+                                                                max_num_rounds=7)   # Lucky 7 
 
