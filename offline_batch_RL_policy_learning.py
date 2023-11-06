@@ -37,8 +37,6 @@ from MARLConfigParser import MARLConfigParser
 # Custom modules 
 from actor_critic import Actor, QNetwork, one_hot_q_values
 from dataset import Dataset
-# from linear_schedule import LinearSchedule
-# from ensemble_weighted_network import EnsembleWeightedNetwork
 
 
 # Set up the system and environement
@@ -150,8 +148,9 @@ def NormalizeDataset(dataset:dict,
                      constraint_ratio:float=0.25) -> dict:
     """
     Function for normalizing the dataset so that the values of one constraint do not normalize the other
-    :param 
-    :param 
+    :param dataset: Dictionary that maps agents to a dataset of experience tuples
+    :param constraint_ratio: The ratio to use in the weight adjustment, applied positive to g1 constraint and negative to g2 constraint
+    :returns Dictionary that maps agents to normalized datasets
     """
     print(f" > Normalizing dataset constraint values")
     # Intialize dataset
@@ -231,7 +230,6 @@ def NormalizeDataset(dataset:dict,
 
 def OfflineBatchRL(env:sumo_rl.parallel_env,
                     dataset: dict,
-                    perform_rollout_comparisons:bool,
                     dataset_policies:list,
                     config_args,
                     nn_save_dir:str,
@@ -246,8 +244,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
     :param env: The SUMO environment that was used to generate the dataset
     :param dataset: Dictionary that maps each agent to its experience tuple
-    :param perform_rollout_comparisons: Boolean indicating if a rollout should be performed at the end of each round to
-      compare the dataset policy with the mean policy
     :param dataset_policies: List of policies that were used to generate the dataset for this experiment (used for online evaluation)
     :param config_args: Configuration arguments used to set up the experiment
     :param nn_save_dir: Directory in which to save the models each round
@@ -469,8 +465,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # TODO: perform some kind of similar rollout for the dataset policies to compare?
 
 
-        # TODO: double check that we're ok seeing the updated version of lambda in each round 
-        # (i.e. what round X produces rather than the values of lambda that were using in round X)
+        # NOTE: We are logging the lambda values produced by round X rather than the values used in 
+        # round X 
         # Adjust lambda
         lambda_1, lambda_2 = OnlineLambdaLearning(lambda_1, lambda_2, g1_returns, g2_returns)
 
@@ -569,36 +565,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
             csv_writer.writerow({**new_row})
 
-
-        # # Adjust lambda using ONLINE rollout
-        # lambda_1, lambda_2 = OnlineLambdaLearning(lambda_1, lambda_2, current_policy_g1_return, current_policy_g2_return)
-
-        # if (t > 1):
-        #     # On the first round, the expected value of lambda was set as the initial value of lambda
-        #     mean_lambda_1 = 1/t*(lambda_1 + ((t-1) * mean_lambda_1))
-        #     mean_lambda_2 = 1/t*(lambda_2 + ((t-1) * mean_lambda_2))
-
-        # # Save the rollout returns and the updated lambdas
-        # with open(f"{csv_save_dir}/rollouts.csv", "a", newline="") as csvfile:
-        #     csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + [agent + '_return_g1' for agent in agents] + 
-        #                                                     ['system_return_g1'] + 
-        #                                                     [agent + '_return_g2' for agent in agents] + 
-        #                                                     ['system_return_g2'] +
-        #                                                     ['lambda_1', 'lambda_2', 'mean_lambda_1', 'mean_lambda_2'])
-        #     new_row = {}
-        #     new_row['round'] = t
-        #     for agent in agents:
-        #         new_row[agent + '_return_g1'] = g1_returns[agent].item()
-        #     new_row['system_return_g1'] = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()
-        #     for agent in agents:
-        #         new_row[agent + '_return_g2'] = g2_returns[agent].item()
-        #     new_row['system_return_g2'] = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()
-        #     new_row['lambda_1'] = lambda_1
-        #     new_row['lambda_2'] = lambda_2
-        #     new_row['mean_lambda_1'] = mean_lambda_1
-        #     new_row['mean_lambda_2'] = mean_lambda_2
-
-        #     csv_writer.writerow({**new_row})
 
         # Capture the round execution time
         round_completeion_time = datetime.now()
@@ -1166,15 +1132,11 @@ def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)
         obses_array, _, _, _, _, _ = mini_dataset[agent]
 
         # Get the max_a Q(s,a) for the observation
-        # TODO: update to not be max?
-        # values = torch.max(value_function[agent].forward(obses_array), dim=1).values
-
         actions_from_policy, _, _ = policies[agent].to(device).get_action(obses_array)
-        # print(f"actions_from_policy: {actions_from_policy}")
-        # print(f"value_function[agent].forward(obses_array): {value_function[agent].forward(obses_array)}")
+        
         # Evaluate the actions that were selected by the policies from this observation
         values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
-        # print(f" >>>>>> values: {values}")
+        
         # Add up the max values of all states from the mini dataset
         cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
         print(f" >>>> cumulative_return for agent '{agent}': {cumulative_return[agent]}")
@@ -1195,24 +1157,17 @@ def OnlineLambdaLearning(lambda_1_prev:float,
     """
 
     # Calculate the accumulated returns (averaged over all agents)
-    # print(f" >>>>> g1_returns: {g1_returns}")
-    # print(f" >>>>> g2_returns: {g2_returns}")
     num_agents = len(g1_returns.keys()) # TODO: add check to make sure g1 and g2 num agents the same
     avg_cumulative_g1_returns = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy() / num_agents
     avg_cumulative_g2_returns = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy() / num_agents
-    # print(f" >>>>> cumulative_g1_returns: {cumulative_g1_returns}")
-    # print(f" >>>>> cumulative_g2_returns: {cumulative_g2_returns}")
 
-    # Lambda learning rate
-    # n = 0.01 # TODO: may need to change
-    # n = 0.00001 # TODO: may need to change
-    n = 0.001 # TODO: may need to change
+    # Lambda learning rate # TODO: config
+    # n = 0.01 
+    # n = 0.00001
+    n = 0.001 
 
     exp_g1_returns = np.exp(n * avg_cumulative_g1_returns)
     exp_g2_returns = np.exp(n * avg_cumulative_g2_returns)
-
-    # print(f" >>>> exp_g1_returns: {exp_g1_returns}")
-    # print(f" >>>> exp_g2_returns: {exp_g2_returns}")
 
     lambda_1 = lambda_1_prev * exp_g1_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)
     lambda_2 = lambda_2_prev * exp_g2_returns / (lambda_1_prev * exp_g1_returns + lambda_2_prev * exp_g2_returns)

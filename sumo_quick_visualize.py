@@ -3,7 +3,7 @@ sumo_quick_visualize.py
     
 Description:
     Script for quickly visualizing a given set of route and net files
-    NOTE: this file just executes a random policy on the environment
+    NOTE: this file just executes a random policy on the environment, no config file is needed
 
 Usage:
     python sumo_quick_visualize.py

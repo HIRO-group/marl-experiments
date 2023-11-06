@@ -3,7 +3,7 @@ sumo_analysis_batch_offline_RL.py
 
 Description:
     Script for analyzing the policies produced by the the batch offline RL routine
-    NOTE: This file currently assumes that the 4x4 sumo configuration (i.e. 16 agents) is being loaded
+    NOTE: This file currently assumes that the 3x3 sumo configuration (i.e. 9 agents) is being loaded
 
 Usage:
     python sumo_analysis_batch_offline_RL.py -c experiments/sumo-3x3.config
@@ -46,28 +46,10 @@ else:
 SPEED_OVERAGE_THRESHOLD = 13.89
 
 # Hard coded to map agents trained on the 2x2.net.xml and 2x2.rou.xml SUMO configuration
-# to agents in the 4x4.net.xml and 4x4c1c2c1c2.rou.xml SUMO configuration
+# to agents in the 3x3.net.xml and 3x3Grid2lanes.rou.xml SUMO configuration
 # Keys are the agents for the 4x4 env and values are the "trained" agents from the 2x2 env
-# AGENT_ALIAS_MAP = { '0':'1',
-#                     '1':'2',
-#                     '2':'1',
-#                     '3':'2',
-#                     '4':'5',
-#                     '5':'6',
-#                     '6':'5',
-#                     '7':'6',
-#                     '8':'1',
-#                     '9':'2',
-#                     '10':'1',
-#                     '11':'2',
-#                     '12':'5',
-#                     '13':'6',
-#                     '14':'5',
-#                     '15':'6'}
 
-# TODO: add a more programatic way to map policies between envs? May not be feasible.. 
-# Hard coded to map agents trained on the 2x2.net.xml and 2x2.rou.xml SUMO configuration
-# to agents in the 3x3Grid2lanes.net.xml and routes14000.rou.xml SUMO configuration
+# Adding a more programatic way to map policies between envs may not be feasible.. 
 AGENT_ALIAS_MAP = { '0':'1',
                     '1':'2',
                     '2':'1',
