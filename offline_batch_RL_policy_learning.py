@@ -1373,10 +1373,9 @@ if __name__ == "__main__":
     perform_rollout_comparisons = True
     mean_policies, policies, mean_lambdas, lambdas = OfflineBatchRL(env,
                                                                 normalized_dataset, 
-                                                                perform_rollout_comparisons,
                                                                 list_of_policies,
                                                                 args, 
                                                                 save_dir,
                                                                 csv_save_dir,
-                                                                max_num_rounds=7)   # Lucky 7 
+                                                                max_num_rounds=10)   # Lucky 7 
 
