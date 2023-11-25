@@ -25,11 +25,11 @@ A repsitory for conducting multi-agent reinforcement learning experiments.
     ```
     python dqn-indpendent-ps.py --gym-id mpe.simple_spread_v2 --N 5 --seed 5 --gpu-id 0 --learning-starts 10000
     ```
-    Currently, only one file (`dqn-independent-SUMO.py`) supports the use of a configuration file.
+    Configuration file support has been added to make command line arguments easier to use and traceable across experiments. Configuration files can be used in the following manner:
     ```
     python dqn-indpendent-SUMO.py -c experiments/sumo-4x4-dqn-independent.config
     ```
- 5. The experiment results are logged in the `csv` directory. Alternatively, the results can be viewed with TensorBoard. (Please install tensorboard in other environment to use the feature).
+ 5. The experiment results are logged in the `csv` directory. Alternatively, the results can be viewed with TensorBoard. (Please [install tensorboard](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.tensorboard) to use this feature).
     ```
     tensorboard --logdir runs/
     ```
