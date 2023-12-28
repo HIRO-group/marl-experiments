@@ -385,7 +385,7 @@ for global_step in range(args.total_timesteps):
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
         if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
-            # print(" >>> s_obses: {}".format(s_obses))
+
             with torch.no_grad():
                 target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
                 td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
