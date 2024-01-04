@@ -33,107 +33,27 @@ import numpy as np
 # import gym
 # TODO: fix conda environment to include the version of gym that has Monitor module
 # from gym.wrappers import TimeLimit#, Monitor
-# from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
 from datetime import datetime
 import random
 import os
 import csv
-from pettingzoo.butterfly import pistonball_v6
-from pettingzoo.mpe import simple_spread_v3
 
 # SUMO dependencies
 import sumo_rl
 import sys
+from sumo_custom_observation import CustomObservationFunction
+from sumo_custom_reward import MaxSpeedRewardFunction
 
+# Config Parser
+from MARLConfigParser import MARLConfigParser
 
 
 if __name__ == "__main__":
-    parser = configargparse.ArgParser(default_config_files=['experiments/sumo-4x4-independent.config'], description='DQN agent')
-    parser.add_argument('-c', '--config_path', required=False, is_config_file=True, help='config file path')
-
-    # Common arguments
-    parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
-                        help='the name of this experiment')
-    parser.add_argument('--gym-id', type=str, default="CartPole-v0",
-                        help='the id of the gym environment')
-    parser.add_argument('--env-args', type=str, default="",
-                        help='string to pass to env init')
-    parser.add_argument('--learning-rate', type=float, default=7e-4,
-                        help='the learning rate of the optimizer')
-    parser.add_argument('--seed', type=int, default=1,
-                        help='seed of the experiment')
-    parser.add_argument('--total-timesteps', type=int, default=500000,
-                        help='total timesteps of the experiments')
-    parser.add_argument('--max-cycles', type=int, default=100,
-                        help='max cycles in each step of the experiments')
-    parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
-                        help='if toggled, `torch.backends.cudnn.deterministic=False`')
-    parser.add_argument('--cuda', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
-                        help='if toggled, cuda will not be enabled by default')
-    parser.add_argument('--prod-mode', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-                        help='run the script in production mode and use wandb to log outputs')
-    parser.add_argument('--capture-video', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-                        help='weather to capture videos of the agent performances (check out `videos` folder)')
-    parser.add_argument('--wandb-project-name', type=str, default="DA-RL",
-                        help="the wandb's project name")
-    parser.add_argument('--wandb-entity', type=str, default=None,
-                        help="the entity (team) of wandb's project")
-    parser.add_argument('--render', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-                        help='if toggled, render environment')
-    parser.add_argument('--global-obs', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-                        help='if toggled, stack agent observations into global state')
-    parser.add_argument('--gpu-id', type=str, default=None,
-                        help='gpu device to use')
-    parser.add_argument('--nn-save-freq', type=int, default=1000,
-                        help='how often to save a copy of the neural network')
-
-    # Algorithm specific arguments
-    parser.add_argument('--N', type=int, default=3,
-                        help='the number of agents')
-    parser.add_argument('--buffer-size', type=int, default=10000,
-                         help='the replay memory buffer size')
-    parser.add_argument('--gamma', type=float, default=0.99,
-                        help='the discount factor gamma')
-    parser.add_argument('--target-network-frequency', type=int, default=500,
-                        help="the timesteps it takes to update the target network")
-    parser.add_argument('--max-grad-norm', type=float, default=0.5,
-                        help='the maximum norm for the gradient clipping')
-    parser.add_argument('--batch-size', type=int, default=32,
-                        help="the batch size of sample from the reply memory")
-    parser.add_argument('--start-e', type=float, default=1,
-                        help="the starting epsilon for exploration")
-    parser.add_argument('--end-e', type=float, default=0.05,
-                        help="the ending epsilon for exploration")
-    parser.add_argument('--lam', type=float, default=0.01,
-                        help="the pension for the variance")
-    parser.add_argument('--exploration-fraction', type=float, default=0.05,
-                        help="the fraction of `total-timesteps` it takes from start-e to go end-e")
-    parser.add_argument('--learning-starts', type=int, default=10000,
-                        help="timestep to start learning")
-    parser.add_argument('--train-frequency', type=int, default=1,
-                        help="the frequency of training")
-    parser.add_argument('--load-weights', type=bool, default=False,
-                    help="whether to load weights for the Q Network")
-
-    # Configuration parameters specific to the SUMO traffic environment
-    parser.add_argument("--route-file", dest="route", type=str, required=False, help="Route definition xml file.\n")
-    parser.add_argument("--net-file", dest="net", type=str, required=False, help="Net definition xml file.\n")
-    parser.add_argument("--mingreen", dest="min_green", type=int, default=10, required=False, help="Minimum time for green lights in SUMO environment.\n")
-    parser.add_argument("--maxgreen", dest="max_green", type=int, default=30, required=False, help="Maximum time for green lights in SUMO environment.\n")
-    parser.add_argument("--sumo-gui", dest="sumo_gui", action="store_true", default=False, help="Run with visualization on SUMO (may require firewall permissions).\n")
-    parser.add_argument("--sumo-seconds", dest="sumo_seconds", type=int, default=10000, required=False, help="Number of simulation seconds. The number of seconds the simulation must end.\n")
-    parser.add_argument("--sumo-reward", dest="sumo_reward", type=str, default='wait', required=False, help="Reward function: \nThe 'queue'reward returns the negative number of total vehicles stopped at all agents each step, \nThe 'wait' reward returns the negative number of cummulative seconds that vehicles have been waiting in the episode.\n")
-
-    # Configuration parameters for analyzing sumo env (only used in sumo_analysis.py)
-    parser.add_argument("--analysis-steps", dest="analysis_steps", type=int, default=500, required=False, 
-                        help="The number of time steps at which we want to investigate the perfomance of the algorithm. E.g. display how the training was going at the 10,000 checkpoint. Note there must be a nn .pt file for each agent at this step.\n")
-    parser.add_argument("--nn-directory", dest="nn_directory", type=str, default=None, required=False, 
-                        help="The directory containing the nn .pt files to load for analysis.\n")
-    parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", type=bool, default=False, required=True, 
-                        help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
+        # Get config parameters                        
+    parser = MARLConfigParser()
+    args = parser.parse_args()
 
     # The SUMO environment is slightly different from the defaul PettingZoo envs so set a flag to indicate if the SUMO env is being used
-    args = parser.parse_args()
     using_sumo = False  
     if args.gym_id == 'sumo':
 
@@ -149,10 +69,6 @@ if __name__ == "__main__":
     if not args.seed:
         args.seed = int(datetime.now())
 
-def one_hot(a, size):
-    b = np.zeros((size))
-    b[a] = 1
-    return b
 
 # TRY NOT TO MODIFY: setup the environment
 if args.gpu_id is not None:
@@ -169,7 +85,8 @@ if args.prod_mode:
 
 nn_dir = f"nn/{experiment_name}"
 csv_dir = f"csv/{experiment_name}"
-os.makedirs(nn_dir)
+os.makedirs(f"{nn_dir}/critic_networks")
+os.makedirs(f"{nn_dir}/actor_networks")
 os.makedirs(csv_dir)
 
 # TRY NOT TO MODIFY: seeding
@@ -179,19 +96,36 @@ device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cp
 if using_sumo:
     sumo_csv = "{}/_SUMO_alpha{}_gamma{}_{}".format(csv_dir, args.learning_rate, args.gamma, experiment_time)
 
+print("\n=================== Environment Information ===================")
 # Instantiate the environment 
 if using_sumo:
     # Sumo must be created using the sumo-rl module
     # Note we have to use the parallel env here to conform to this implementation of dqn
-    # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-    env = sumo_rl.parallel_env(net_file=args.net, 
-                    route_file=args.route,
-                    use_gui=args.sumo_gui,
-                    max_green=args.max_green,
-                    min_green=args.min_green,
-                    num_seconds=args.sumo_seconds,
-                    reward_fn=args.sumo_reward, 
-                    sumo_warnings=False)
+
+    if (args.sumo_reward == "custom"):
+        # Use the custom "max speed" reward function
+        print ( " > Using CUSTOM reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=MaxSpeedRewardFunction,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
+    else:
+        print ( " > Using standard reward")
+        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=args.sumo_reward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
 
 else: 
     print(" > ENV ARGS: {}".format(args.env_args))
@@ -203,18 +137,35 @@ num_agents = len(env.possible_agents)
 action_spaces = env.action_spaces
 observation_spaces = env.observation_spaces
 
-print("\n=================== Environment Information ===================")
+agents = env.possible_agents
 print(" > agents:\n {}".format(agents))
+
+num_agents = len(env.possible_agents)
 print(" > num_agents:\n {}".format(num_agents))
+
+# TODO: these dictionaries are deprecated, use action_space & observation_space functions instead
+action_spaces = env.action_spaces
 print(" > action_spaces:\n {}".format(action_spaces))
+
+observation_spaces = env.observation_spaces
 print(" > observation_spaces:\n {}".format(observation_spaces))
 
-
+# CSV files to save episode metrics during training
+# system_episode_reward: the cumulative reward of all agents during the episode
+# global_step: the global step in training
 with open(f"{csv_dir}/td_loss.csv", "w", newline="") as csvfile:
     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
     csv_writer.writeheader()
 with open(f"{csv_dir}/episode_reward.csv", "w", newline="") as csvfile:
     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
+    csv_writer.writeheader()
+
+# system_episode_max_speed: Maximum speed observed by all agents during an episode
+# system_episode_min_max_speed: The lowest of all maximum speeds observed by all agents during an episode
+#   i.e. if four agents observed max speeds of [6.6, 7.0, 10.0, 12.0] during the episode, 
+#   system_episode_min_max_speed would return 6.6 and system_episode_max_speed would return 12.0
+with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
+    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'global_step'])    
     csv_writer.writeheader()
 
 random.seed(args.seed)
@@ -310,9 +261,10 @@ if args.global_obs:
 if args.render:
     env.render()    # TODO: verify that the sumo env supports render
 
-episode_rewards = {agent: 0 for agent in agents}
-actions = {agent: None for agent in agents}
-losses = {agent: None for agent in agents}
+episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
+episode_max_speeds = {agent: [] for agent in agents}    # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
+actions = {agent: None for agent in agents}             # Dictionary that maps each agent to the action it selected
+losses = {agent: None for agent in agents}              # Dictionary that maps each agent to the loss values for its critic network
 lir_1 = 0
 uir_1 = 0
 var_1 = 0
@@ -352,6 +304,8 @@ for global_step in range(args.total_timesteps):
     for agent in agents:
 
         episode_rewards[agent] += rewards[agent]
+        # TODO: need to modify this for global observations
+        episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
 
         # ALGO LOGIC: training.
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
@@ -398,8 +352,18 @@ for global_step in range(args.total_timesteps):
     if np.prod(list(dones.values())) or global_step % args.max_cycles == args.max_cycles-1: 
         system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
 
+        # Calculate the maximum of all max speeds observed from each agent during the episode
+        agent_max_speeds = {agent:0 for agent in agents}
+        for agent in agents:
+            agent_max_speeds[agent] = max(episode_max_speeds[agent])
+        system_episode_max_speed = max(list(agent_max_speeds.values()))
+        system_episode_min_max_speed = min(list(agent_max_speeds.values()))
+        print(" >>> agent_max_speeds {}".format(agent_max_speeds))
+        print(" >>> system_episode_max_speed {}".format(system_episode_max_speed))
+        print(" >>> system_episode_min_max_speed {}".format(system_episode_min_max_speed))
+
         # TRY NOT TO MODIFY: record rewards for plotting purposes
-        print(f"global_step={global_step}, system_episode_reward={system_episode_reward}")
+        print(f" >>> global_step={global_step}, system_episode_reward={system_episode_reward}")
         diff_1 = uir_1-lir_1
         # var_1 = var_1/(cnt-1e-7)
         lir_2 = min(episode_rewards.values())
@@ -407,14 +371,14 @@ for global_step in range(args.total_timesteps):
         diff_2 = uir_2-lir_2
         var_2 = np.var(list(episode_rewards.values())) 
         
-        print(f"system_episode_diff_1={diff_1}")
-        print(f"uir1={uir_1}")
-        print(f"lir1={lir_1}")
-        print(f"system_variance1={var_1}")
-        print(f"system_episode_diff_2={diff_2}")
-        print(f"uir2={uir_2}")
-        print(f"lir2={lir_2}")
-        print(f"system_variance2={var_2}")
+        print(f" >>> system_episode_diff_1={diff_1}")
+        print(f" >>> uir1={uir_1}")
+        print(f" >>> lir1={lir_1}")
+        print(f" >>> system_variance1={var_1}")
+        print(f" >>> system_episode_diff_2={diff_2}")
+        print(f" >>> uir2={uir_2}")
+        print(f" >>> lir2={lir_2}")
+        print(f" >>> system_variance2={var_2}")
 
         # Logging should only be done after we've started training, up until then, the agents are just getting experience
         if global_step > args.learning_starts:
@@ -437,6 +401,12 @@ for global_step in range(args.total_timesteps):
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
                 csv_writer.writerow({**episode_rewards, **{'system_episode_reward': system_episode_reward, 'global_step': global_step}})
 
+            with open(f"{csv_dir}/episode_max_speeds.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'global_step'])
+                csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
+                                                            'system_episode_min_max_speed': system_episode_min_max_speed,
+                                                            'global_step': global_step}})
+
             # If we're using the SUMO env, also save some data specific to that environment
             if using_sumo:
                 env.unwrapped.save_csv(sumo_csv, global_step)
@@ -456,6 +426,7 @@ for global_step in range(args.total_timesteps):
         if args.render:
             env.render()
         episode_rewards = {agent: 0 for agent in agents}
+        episode_max_speeds = {agent: [0] for agent in agents} 
         actions = {agent: None for agent in agents}
 
 
