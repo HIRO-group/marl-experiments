@@ -29,110 +29,27 @@ import configargparse
 from distutils.util import strtobool
 import collections
 import numpy as np
-import gym
+
 # TODO: fix conda environment to include the version of gym that has Monitor module
-from gym.wrappers import TimeLimit #, Monitor
-from gym.spaces import Discrete, Box, MultiBinary, MultiDiscrete, Space
 from datetime import datetime
 import random
 import os
 import csv
-import pettingzoo
 
 # SUMO dependencies
 import sumo_rl
 import sys
+from sumo_custom_observation import CustomObservationFunction
+from sumo_custom_reward import MaxSpeedRewardFunction
 
+# Config Parser
+from MARLConfigParser import MARLConfigParser
 
 if __name__ == "__main__":
 
-    parser = configargparse.ArgParser(default_config_files=['experiments/sumo-4x4-independent.config'], description='DQN agent')
-    parser.add_argument('-c', '--config_path', required=False, is_config_file=True, help='config file path')
-
-    # Common arguments
-    parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
-                        help='the name of this experiment')
-    parser.add_argument('--gym-id', type=str, default="CartPole-v0",
-                        help='the id of the gym environment')
-    parser.add_argument('--env-args', type=str, default="",
-                        help='string to pass to env init')
-    parser.add_argument('--learning-rate', type=float, default=7e-4,
-                        help='the learning rate of the optimizer')
-    parser.add_argument('--seed', type=int, default=1,
-                        help='seed of the experiment')
-    parser.add_argument('--total-timesteps', type=int, default=500000,
-                        help='total timesteps of the experiments')
-    parser.add_argument('--max-cycles', type=int, default=100,
-                        help='max cycles in each step of the experiments')
-    parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
-                        help='if toggled, `torch.backends.cudnn.deterministic=False`')
-    parser.add_argument('--cuda', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
-                        help='if toggled, cuda will not be enabled by default')
-    parser.add_argument('--prod-mode', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-                        help='run the script in production mode and use wandb to log outputs')
-    parser.add_argument('--capture-video', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-                        help='weather to capture videos of the agent performances (check out `videos` folder)')
-    parser.add_argument('--wandb-project-name', type=str, default="DA-RL",
-                        help="the wandb's project name")
-    parser.add_argument('--wandb-entity', type=str, default=None,
-                        help="the entity (team) of wandb's project")
-    parser.add_argument('--render', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
-                        help='if toggled, render environment')
-    parser.add_argument('--global-obs', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
-                        help='if toggled, stack agent observations into global state')
-    parser.add_argument('--gpu-id', type=str, default=None,
-                        help='gpu device to use')
-    parser.add_argument('--nn-save-freq', type=int, default=1000,
-                        help='how often to save a copy of the neural network')
-
-    # Algorithm specific arguments
-    parser.add_argument('--N', type=int, default=3,
-                        help='the number of agents')
-    parser.add_argument('--buffer-size', type=int, default=10000,
-                         help='the replay memory buffer size')
-    parser.add_argument('--gamma', type=float, default=0.99,
-                        help='the discount factor gamma')
-    parser.add_argument('--target-network-frequency', type=int, default=500,
-                        help="the timesteps it takes to update the target network")
-    parser.add_argument('--max-grad-norm', type=float, default=0.5,
-                        help='the maximum norm for the gradient clipping')
-    parser.add_argument('--batch-size', type=int, default=32,
-                        help="the batch size of sample from the reply memory")
-    parser.add_argument('--start-e', type=float, default=1,
-                        help="the starting epsilon for exploration")
-    parser.add_argument('--end-e', type=float, default=0.05,
-                        help="the ending epsilon for exploration")
-    parser.add_argument('--lam', type=float, default=0.01,
-                        help="the pension for the variance")
-    parser.add_argument('--exploration-fraction', type=float, default=0.05,
-                        help="the fraction of `total-timesteps` it takes from start-e to go end-e")
-    parser.add_argument('--learning-starts', type=int, default=10000,
-                        help="timestep to start learning")
-    parser.add_argument('--train-frequency', type=int, default=1,
-                        help="the frequency of training")
-    parser.add_argument('--load-weights', type=bool, default=False,
-                    help="whether to load weights for the Q Network")
-
-    # Configuration parameters specific to the SUMO traffic environment
-    parser.add_argument("--route-file", dest="route", type=str, required=False, help="Route definition xml file.\n")
-    parser.add_argument("--net-file", dest="net", type=str, required=False, help="Net definition xml file.\n")
-    parser.add_argument("--mingreen", dest="min_green", type=int, default=10, required=False, help="Minimum time for green lights in SUMO environment.\n")
-    parser.add_argument("--maxgreen", dest="max_green", type=int, default=30, required=False, help="Maximum time for green lights in SUMO environment.\n")
-    parser.add_argument("--sumo-gui", dest="sumo_gui", action="store_true", default=False, help="Run with visualization on SUMO (may require firewall permissions).\n")
-    parser.add_argument("--sumo-seconds", dest="sumo_seconds", type=int, default=10000, required=False, help="Number of simulation seconds. The number of seconds the simulation must end.\n")
-    parser.add_argument("--sumo-reward", dest="sumo_reward", type=str, default='wait', required=False, help="Reward function: \nThe 'queue'reward returns the negative number of total vehicles stopped at all agents each step, \nThe 'wait' reward returns the negative number of cummulative seconds that vehicles have been waiting in the episode.\n")
-
-    # Configuration parameters for analyzing sumo env (only used in sumo_analysis.py)
-    parser.add_argument("--analysis-steps", dest="analysis_steps", type=int, default=500, required=False, 
-                        help="The number of time steps at which we want to investigate the perfomance of the algorithm. E.g. display how the training was going at the 10,000 checkpoint. Note there must be a nn .pt file for each agent at this step.\n")
-    parser.add_argument("--nn-directory", dest="nn_directory", type=str, default=None, required=False, 
-                        help="The directory containing the nn .pt files to load for analysis.\n")
-    parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", type=bool, default=False, required=True, 
-                        help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")                        
-
+    # Get config parameters                        
+    parser = MARLConfigParser()
     args = parser.parse_args()
-    if not args.seed:
-        args.seed = int(time.time())
 
     # The SUMO environment is slightly different from the defaul PettingZoo envs so set a flag to indicate if the SUMO env is being used
     args = parser.parse_args()
@@ -149,8 +66,7 @@ if __name__ == "__main__":
             sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
     if not args.seed:
-        args.seed = int(time.time())
-
+        args.seed = int(datetime.now())
 
 
 def one_hot(a, size):
@@ -185,36 +101,56 @@ device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cp
 if using_sumo:
     sumo_csv = "{}/_SUMO_alpha{}_gamma{}_{}".format(csv_dir, args.learning_rate, args.gamma, experiment_time)
 
+print("\n=================== Environment Information ===================")
 # Instantiate the environment 
 if using_sumo:
     # Sumo must be created using the sumo-rl module
     # Note we have to use the parallel env here to conform to this implementation of dqn
-    # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-    env = sumo_rl.parallel_env(net_file=args.net, 
-                    route_file=args.route,
-                    use_gui=args.sumo_gui,
-                    max_green=args.max_green,
-                    min_green=args.min_green,
-                    num_seconds=args.sumo_seconds,
-                    reward_fn=args.sumo_reward, 
-                    sumo_warnings=False)
+
+    if (args.sumo_reward == "custom"):
+        # Use the custom "max speed" reward function
+        print ( " > Using CUSTOM reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=MaxSpeedRewardFunction,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
+    else:
+        print ( " > Using standard reward")
+        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                reward_fn=args.sumo_reward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)
 
 else:
     exec(f"import pettingzoo.{args.gym_id}") # lol
     exec(f"env = pettingzoo.{args.gym_id}.parallel_env(N={args.N}, local_ratio=0.5, max_cycles={args.max_cycles}, continuous_actions=False)") # lol
 
 agents = env.possible_agents
+print(" > agents:\n {}".format(agents))
+
 num_agents = len(env.possible_agents)
+print(" > num_agents:\n {}".format(num_agents))
+
 # TODO: these dictionaries are deprecated, use action_space & observation_space functions instead
 action_spaces = env.action_spaces
-observation_spaces = env.observation_spaces
-onehot_keys = {agent: i for i, agent in enumerate(agents)}
+print(" > action_spaces:\n {}".format(action_spaces))
 
-print("\n=================== Environment Information ===================")
-print("agents:\n {}".format(agents))
-print("num_agents:\n {}".format(num_agents))
-print("action_spaces:\n {}".format(action_spaces))
-print("observation_spaces:\n {}".format(observation_spaces))
+observation_spaces = env.observation_spaces
+print(" > observation_spaces:\n {}".format(observation_spaces))
+
+onehot_keys = {agent: i for i, agent in enumerate(agents)}
+print(" > onehot_keys:\n {}".format(onehot_keys))
 
 # TODO: Plotting loss is currently disabled for this implementation - see below
 # with open(f"{csv_dir}/td_loss.csv", "w", newline="") as csvfile:
@@ -229,15 +165,15 @@ np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 env.reset(seed=args.seed)
-# env.action_space.seed(args.seed)
-# env.observation_space.seed(args.seed)
+
 for agent in agents:
     action_spaces[agent].seed(args.seed)
     observation_spaces[agent].seed(args.seed)
 # respect the default timelimit
 # assert isinstance(env.action_space, Discrete), "only discrete action space is supported"
-if args.capture_video:
-    env = Monitor(env, f'videos/{experiment_name}')
+# TODO: Monitor was not working 
+# if args.capture_video:
+#     env = Monitor(env, f'videos/{experiment_name}')
 
 # modified from https://github.com/seungeunrho/minimalRL/blob/master/dqn.py#
 class ReplayBuffer():
@@ -335,7 +271,7 @@ print(device.__repr__())
 print(q_network) # network of last agent
 
 # TRY NOT TO MODIFY: start the game
-obses = env.reset()
+obses, _ = env.reset()
 
 
 # Add one hot encoding for either global observations or independent observations
@@ -509,7 +445,7 @@ for global_step in range(args.total_timesteps):
             if using_sumo:
                 env.unwrapped.save_csv(sumo_csv, global_step)
 
-        obses = env.reset()
+        obses, _ = env.reset()
         lir_1 = 0
         uir_1 = 0
         var_1 = 0

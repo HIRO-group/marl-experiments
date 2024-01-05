@@ -30,7 +30,7 @@ import configargparse
 from distutils.util import strtobool
 import collections
 import numpy as np
-# import gym
+
 # TODO: fix conda environment to include the version of gym that has Monitor module
 # from gym.wrappers import TimeLimit#, Monitor
 from datetime import datetime
@@ -49,7 +49,7 @@ from MARLConfigParser import MARLConfigParser
 
 
 if __name__ == "__main__":
-        # Get config parameters                        
+    # Get config parameters                        
     parser = MARLConfigParser()
     args = parser.parse_args()
 
@@ -173,8 +173,7 @@ np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 env.reset(seed=args.seed)
-# env.action_space.seed(args.seed)
-# env.observation_space.seed(args.seed)
+
 for agent in agents:
     action_spaces[agent].seed(args.seed)
     observation_spaces[agent].seed(args.seed)
