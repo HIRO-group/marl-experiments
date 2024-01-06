@@ -153,9 +153,9 @@ onehot_keys = {agent: i for i, agent in enumerate(agents)}
 print(" > onehot_keys:\n {}".format(onehot_keys))
 
 # TODO: Plotting loss is currently disabled for this implementation - see below
-# with open(f"{csv_dir}/td_loss.csv", "w", newline="") as csvfile:
-#     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
-#     csv_writer.writeheader()
+with open(f"{csv_dir}/td_loss.csv", "w", newline="") as csvfile:
+    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
+    csv_writer.writeheader()
 with open(f"{csv_dir}/episode_reward.csv", "w", newline="") as csvfile:
     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
     csv_writer.writeheader()
@@ -243,8 +243,6 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     '''
     slope =  (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
-
-# neighbors = {agent: agents for agent in agents}
 
 # Initialize data structures for training
 eg_agent = agents[0]
@@ -341,9 +339,12 @@ for global_step in range(args.total_timesteps):
 
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
     
-    # ALGO LOGIC: training.
+    # ALGO LOGIC: training
+    # In DQN without parameter sharing, each agent's network is updated independently
+    # Experience from that agent is used to estimate the state-action value function for that agent but in parameter sharing, the state-action 
+    # value function is estimated using the exeprience from a random agent
     if global_step > args.learning_starts and global_step % args.train_frequency == 0:
-        agent = random.choice(agents) # each minibatch is "centered" around a random agent
+        agent = random.choice(agents) 
         # turn = int(global_step/num_turns)%num_agents    # Pick the agent around which the minibatch will be centered
         # agent = agents[turn]
         sample_batch_indices = np.random.randint(low=0, high=len(rb[agent].buffer), size=args.batch_size)
@@ -389,14 +390,14 @@ for global_step in range(args.total_timesteps):
 
     # TODO: Plotting td_loss is currently disabled for this implementation - it must be updated to suppor tracking the total loss 
     # of the system rather than retrieving loss for a given agent
-    # if global_step > args.learning_starts and global_step % args.train_frequency == 0:
-    #     if global_step % 100 == 0:
-    #         system_loss = sum(list(losses.values()))
-    #         writer.add_scalar("losses/system_td_loss/", system_loss, global_step)
+    if global_step > args.learning_starts and global_step % args.train_frequency == 0:
+        if global_step % 100 == 0:
+            system_loss = sum(list(losses.values()))
+            writer.add_scalar("losses/system_td_loss/", system_loss, global_step)
 
-    #         with open(f"{csv_dir}/td_loss.csv", "a", newline="") as csvfile:
-    #             csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
-    #             csv_writer.writerow({**losses, **{'system_loss': system_loss, 'global_step': global_step}})
+            with open(f"{csv_dir}/td_loss.csv", "a", newline="") as csvfile:
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
+                csv_writer.writerow({**losses, **{'system_loss': system_loss, 'global_step': global_step}})
 
     # If all agents are done, log the results and reset the evnironment to continue training
     if np.prod(list(dones.values())) or global_step % args.max_cycles == args.max_cycles-1: 
@@ -421,21 +422,20 @@ for global_step in range(args.total_timesteps):
 
         # Logging should only be done after we've started training, up until then, the agents are just getting experience
         if global_step > args.learning_starts:
+            for agent in agents:
+                writer.add_scalar("charts/episode_reward/" + agent, episode_rewards[agent], global_step)
             writer.add_scalar("charts/episode_reward/uir_1", uir_1, global_step)
             writer.add_scalar("charts/episode_reward/lir_1", lir_1, global_step)
             writer.add_scalar("charts/episode_reward/diff_1", diff_1, global_step)
             writer.add_scalar("charts/episode_reward/var_1", var_1, global_step)
+
             writer.add_scalar("charts/episode_reward/uir_2", uir_2, global_step)
             writer.add_scalar("charts/episode_reward/lir_2", lir_2, global_step)
             writer.add_scalar("charts/episode_reward/diff_2", diff_2, global_step)
             writer.add_scalar("charts/episode_reward/var_2", var_2, global_step)
+
             writer.add_scalar("charts/epsilon/", epsilon, global_step)
             writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
-
-            for agent in agents:
-                writer.add_scalar("charts/episode_reward/" + agent, episode_rewards[agent], global_step)
-            # writer.add_scalar("charts/epsilon/", epsilon, global_step)
-            # writer.add_scalar("charts/system_episode_reward/", system_episode_reward, global_step)
 
             with open(f"{csv_dir}/episode_reward.csv", "a", newline="") as csvfile:
                 csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_reward', 'global_step'])
@@ -445,13 +445,14 @@ for global_step in range(args.total_timesteps):
             if using_sumo:
                 env.unwrapped.save_csv(sumo_csv, global_step)
 
+        # Reset environment and various metrics since the episode completed
         obses, _ = env.reset()
         lir_1 = 0
         uir_1 = 0
         var_1 = 0
         cnt = 0
 
-        # Add one hot encoding for either global observations or independent observations
+        # Add one hot encoding for either global observations or independent observations once the environment has been reset
         if args.global_obs:
             global_obs = np.hstack(list(obses.values()))
             for agent in agents:
