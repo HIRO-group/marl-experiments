@@ -284,51 +284,101 @@ def one_hot_q_values(q_values):
     return torch.from_numpy(one_hot_values)
 
 
+# TRY NOT TO MODIFY: start the game
+print(f" > Initializing environment")
+obses, _ = env.reset()
+
 # Initialize data structures for training
-rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
-q_network = {}  # Dictionary for storing q-networks (maps agent to a q-network), these are the "critics"
-target_network = {} # Dictionary for storing target networks (maps agent to a network)
-actor_network = {} # Dictionary for storing actor networks (maps agents to a network)
-optimizer = {}  # Dictionary for storing optimizer for each agent's network
-actor_optimizer = {} # Dictionary for storing the optimizers used to train the actor networks 
+# NOTE: When using parameter sharing, we only need one network & optimizer but when not using parameter sharing,
+# each agent gets its own
+rb = {agent: ReplayBuffer(args.buffer_size) for agent in agents}    # Dictionary for storing replay buffers (maps agent to a replay buffer)
+print(" > Initializing neural networks")
 
-print(" > INITIALIZING NEURAL NETWORKS")
-for agent in agents:
-    observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
-    rb[agent] = ReplayBuffer(args.buffer_size)
-    q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-    target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-    target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the critic network
-    actor_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
-    optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate) # All agents use the same optimizer for training
-    actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=args.learning_rate)
+if args.parameter_sharing_model:
+    # Parameter sharing is being used
+    print(f" >> Parameter sharing enabled")
+    eg_agent = agents[0]
+    onehot_keys = {agent: i for i, agent in enumerate(agents)}
 
-    print(" >> AGENT: {}".format(agent))    
-    print(" >> OBSERVATION_SPACE_SHAPE: {}".format(observation_space_shape))
-    print(" >> ACTION_SPACE_SHAPE: {}".format(action_spaces[agent].n))
+    if args.global_obs:
+        print(f" >>> Global observations enabled")
+        # Define the observation space dimensions (depending on whether or not global observations are being used)
+        observation_space_shape = tuple((shape+1) * (num_agents) for shape in observation_spaces[eg_agent].shape)
+
+        global_obs = np.hstack(list(obses.values()))
+        for agent in agents:
+            onehot = np.zeros(num_agents)
+            onehot[onehot_keys[agent]] = 1.0
+            obses[agent] = np.hstack([onehot, global_obs])        
+
+    else:
+        print(f" >>> Global observations NOT enabled")
+        observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
+        observation_space_shape = tuple(np.array([observation_space_shape]))   
+        for agent in agents:
+            onehot = np.zeros(num_agents)
+            onehot[onehot_keys[agent]] = 1.0
+            obses[agent] = np.hstack([onehot, obses[agent]])
+
+    q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)         # Single q-network (i.e. "critic") for training
+    target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)    # The target q-network
+    target_network.load_state_dict(q_network.state_dict())                                      
+    actor_network = Actor(observation_space_shape, action_spaces[agent].n).to(device)           # Single actor network for training
+    optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)                       # Optimizer for the critic
+    actor_optimizer = optim.Adam(list(actor_network.parameters()), lr=args.learning_rate)       # Optimizer for the actor
+    
+    print(f" >> Observation space shape: {observation_space_shape}".format(observation_space_shape))
+    print(f" >> Actionspace shape: {action_spaces[agent].n}")    
+    print(f" >> Q-network structure: { q_network}") 
+
+
+
+
+else:
+    print(f" >> Parameter sharing NOT enabled")
+    q_network = {}          # Dictionary for storing q-networks (maps agent to a q-network), these are the "critics"
+    target_network = {}     # Dictionary for storing target networks (maps agent to a network)
+    actor_network = {}      # Dictionary for storing actor networks (maps agents to a network)
+    optimizer = {}          # Dictionary for storing optimizer for each agent's network
+    actor_optimizer = {}    # Dictionary for storing the optimizers used to train the actor networks 
+
+    # TODO: add option to use parameter sharing, in that case the structure of each neural network will change (only one actor and critic for 
+    # all agents )
+    for agent in agents:
+        observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
+        q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+        target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+        target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the critic network
+        actor_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
+        optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate) # All agents use the same optimizer for training
+        actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=args.learning_rate)
+
+        print(f" >>> Agent: {agent}".format(agent))    
+        print(f" >>> Observation space shape: {observation_space_shape}".format(observation_space_shape))
+        print(f" >>> Action space shape: {action_spaces[agent].n}")
+    print(f" >> Q-network structure: { q_network[agent]}") # network of last agent
+
+    # Global states
+    if args.global_obs:
+        print(f" >>> Global observations enabled")
+        global_obs = np.hstack(list(obses.values()))
+        obses = {agent: global_obs for agent in agents}
+
+    else: 
+        print(f" >>> Global observations NOT enabled")
+
+
 
 loss_fn = nn.MSELoss() # TODO: should the loss function be configurable?
 actor_loss_fn = nn.CrossEntropyLoss()
 
 print(" > Device: ",device.__repr__())
-print(" > Q_network structure: ", q_network[agent]) # network of last agent
 
-# TRY NOT TO MODIFY: start the game
-obses, _ = env.reset()
-
-
-# Global states
-if args.global_obs:
-    print(" > GLOBAL OBSERVATIONS ENABLED")
-    global_obs = np.hstack(list(obses.values()))
-    obses = {agent: global_obs for agent in agents}
-
-else: 
-    print(" > GLOBAL OBSERVATIONS DISABLED")
 
 if args.render:
     env.render()    # TODO: verify that the sumo env supports render
 
+# TODO: do we need to make changes here for parameter sharing? When running with parameter sharing, these values aren't really captured for each agent
 episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
 episode_max_speeds = {agent: [] for agent in agents}    # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
 actions = {agent: None for agent in agents}             # Dictionary that maps each agent to the action it selected
@@ -350,7 +400,11 @@ for global_step in range(args.total_timesteps):
             actions[agent] = action_spaces[agent].sample()
         else:
             # Actor choses the actions
-            action, _, _ = actor_network[agent].get_action(obses[agent])
+            if args.parameter_sharing_model:
+                action, _, _ = actor_network.get_action(obses[agent])
+            else:
+                action, _, _ = actor_network[agent].get_action(obses[agent])
+            
             actions[agent] = action.detach().cpu().numpy()
             
             # Letting critic pick the actions
@@ -360,10 +414,25 @@ for global_step in range(args.total_timesteps):
     # TRY NOT TO MODIFY: execute the game and log data.
     next_obses, rewards, dones, _, _ = env.step(actions)
 
-    # Global states
-    if args.global_obs:
-        global_obs = np.hstack(list(next_obses.values()))
-        next_obses = {agent: global_obs for agent in agents}
+    if args.parameter_sharing_model:
+        # When using parameter sharing, add one hot encoding for either global observations or independent observations
+        if args.global_obs:
+            global_next_obs = np.hstack(list(next_obses.values()))
+            for agent in agents:
+                onehot = np.zeros(num_agents)
+                onehot[onehot_keys[agent]] = 1.0
+                next_obses[agent] = np.hstack([onehot, global_next_obs])
+        else:
+            for agent in agents:
+                onehot = np.zeros(num_agents)
+                onehot[onehot_keys[agent]] = 1.0
+                next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+
+    else:
+        # Global states
+        if args.global_obs:
+            global_obs = np.hstack(list(next_obses.values()))
+            next_obses = {agent: global_obs for agent in agents}
 
     if args.render:
         env.render()
@@ -374,39 +443,41 @@ for global_step in range(args.total_timesteps):
     var_1 += np.var(list(rewards.values())) # Accumulated variance of rewards received by all agents this step
     cnt += 1
 
-    # Update the networks for each agent
     for agent in agents:
         
         episode_rewards[agent] += rewards[agent]
         # TODO: need to modify this for global observations
         episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
         
-        # ALGO LOGIC: critic training
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
-        if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
+
+    # ALGO LOGIC: critic training
+    if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
+
+        if args.parameter_sharing_model:
+            # Randomly sample an agent to use to calculate the estimated state-action values
+            agent = random.choice(agents)
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
 
             with torch.no_grad():
-                target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
-                td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
-            q_values = q_network[agent].forward(s_obses)
-
+                target_maxes = []
+                target = torch.max(target_network.forward(s_next_obses), dim=1)[0]
+                td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
+            q_values = q_network.forward(s_obses)
             # Get the max Q(s,a) for each observation in the batch
             old_val = q_values.gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
-
-            # Compute loss for agent's critic
+            
             loss = loss_fn(td_target, old_val)
             losses[agent] = loss.item()
-
-            # optimize the model for the critic
-            optimizer[agent].zero_grad()
+            
+            # optimize the model
+            optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), args.max_grad_norm)
-            optimizer[agent].step()
-
+            nn.utils.clip_grad_norm_(list(q_network.parameters()), args.max_grad_norm)
+            optimizer.step()
 
             # Actor training
-            a, log_pi, action_probs = actor_network[agent].get_action(s_obses)
+            a, log_pi, action_probs = actor_network.get_action(s_obses)
 
             # Compute the loss for this agent's actor
             # NOTE: Actor uses cross-entropy loss function where
@@ -416,44 +487,117 @@ for global_step in range(args.total_timesteps):
             actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
             actor_losses[agent] = actor_loss.item()
 
-            actor_optimizer[agent].zero_grad()
+            actor_optimizer.zero_grad()
             actor_loss.backward()
-            nn.utils.clip_grad_norm_(list(actor_network[agent].parameters()), args.max_grad_norm)
-            actor_optimizer[agent].step()
+            nn.utils.clip_grad_norm_(list(actor_network.parameters()), args.max_grad_norm)
+            actor_optimizer.step()
 
             # update the target network
             if global_step % args.target_network_frequency == 0:
-                target_network[agent].load_state_dict(q_network[agent].state_dict())
+                target_network.load_state_dict(q_network.state_dict())
 
-            # Save loss values occasionally
-            if global_step % 100 == 0:
-                writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
-                writer.add_scalar("losses/actor_loss/" + agent, actor_loss, global_step)
+            if global_step % args.nn_save_freq == 0:
+                for agent in agents:
+                    torch.save(q_network.state_dict(), f"{nn_dir}/critic_networks/{global_step}.pt")
+                    torch.save(actor_network.state_dict(), f"{nn_dir}/actor_networks/{global_step}.pt")
 
-        # Save a snapshot of the actor and critic networks at this iteration of training
-        if global_step % args.nn_save_freq == 0:
-            for a in agents:
-                torch.save(q_network[a].state_dict(), f"{nn_dir}/critic_networks/{global_step}-{a}.pt")
-                torch.save(actor_network[a].state_dict(), f"{nn_dir}/actor_networks/{global_step}-{a}.pt")
+            # if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
+            #     # Save loss values occasionally
+            #     if (global_step % 100 == 0):
+            #         system_loss = sum(list(losses.values()))
+            #         system_actor_loss = sum(list(actor_losses.values()))
+
+            #         writer.add_scalar("losses/system_td_loss/", system_loss, global_step)
+            #         writer.add_scalar("losses/system_actor_loss/", system_actor_loss, global_step)
+
+            #         # Log data to CSV
+            #         with open(f"{csv_dir}/critic_loss.csv", "a", newline="") as csvfile:
+            #             csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
+            #             csv_writer.writerow({**losses, **{'system_loss': system_loss, 'global_step': global_step}})
+            #         with open(f"{csv_dir}/actor_loss.csv", "a", newline="") as csvfile:    
+            #             csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_actor_loss', 'global_step'])                        
+            #             csv_writer.writerow({**actor_losses, **{'system_actor_loss': system_actor_loss, 'global_step': global_step}})
+
+        else:
+            # Update the networks for each agent
+            for agent in agents:
+
+                s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
+
+                with torch.no_grad():
+                    target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
+                    td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+                q_values = q_network[agent].forward(s_obses)
+
+                # Get the max Q(s,a) for each observation in the batch
+                old_val = q_values.gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+
+                # Compute loss for agent's critic
+                loss = loss_fn(td_target, old_val)
+                losses[agent] = loss.item()
+
+                # optimize the model for the critic
+                optimizer[agent].zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), args.max_grad_norm)
+                optimizer[agent].step()
+
+
+                # Actor training
+                a, log_pi, action_probs = actor_network[agent].get_action(s_obses)
+
+                # Compute the loss for this agent's actor
+                # NOTE: Actor uses cross-entropy loss function where
+                # input is the policy dist and the target is the value function with one-hot encoding applied
+                # Q-values from "critic" encoded so that the highest state-action value maps to a probability of 1
+                q_values_one_hot = one_hot_q_values(q_values)    
+                actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
+                actor_losses[agent] = actor_loss.item()
+
+                actor_optimizer[agent].zero_grad()
+                actor_loss.backward()
+                nn.utils.clip_grad_norm_(list(actor_network[agent].parameters()), args.max_grad_norm)
+                actor_optimizer[agent].step()
+
+                # update the target network
+                if global_step % args.target_network_frequency == 0:
+                    target_network[agent].load_state_dict(q_network[agent].state_dict())
+
+                # Save loss values occasionally
+                if global_step % 100 == 0:
+                    writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
+                    writer.add_scalar("losses/actor_loss/" + agent, actor_loss, global_step)
+
+            # Save a snapshot of the actor and critic networks at this iteration of training
+            if global_step % args.nn_save_freq == 0:
+                for a in agents:
+                    torch.save(q_network[a].state_dict(), f"{nn_dir}/critic_networks/{global_step}-{a}.pt")
+                    torch.save(actor_network[a].state_dict(), f"{nn_dir}/actor_networks/{global_step}-{a}.pt")
+
+        # Save loss values occassionally
+        # NOTE: When using parameter sharing, loss is not calculated for all agents each update step. This means that when loss is logged, 
+        # only 1 agent has the most updated. In other words, if there are 4 agents, the row in the loss csv file for training step X
+        # will have values for all 4 agents but only one of those values will be current (the other 3 will be stale by some number of 
+        # training steps). This really should not matter as the log file should still show the same trends for each agent and the entire
+        # system overall
+        if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
+            if (global_step % 100 == 0):
+                # Log the data to TensorBoard
+                system_loss = sum(list(losses.values()))
+                writer.add_scalar("losses/system_td_loss/", system_loss, global_step)
+                system_actor_loss = sum(list(actor_losses.values()))
+                writer.add_scalar("losses/system_actor_loss/", system_actor_loss, global_step)
+
+                # Log data to CSV
+                with open(f"{csv_dir}/critic_loss.csv", "a", newline="") as csvfile:
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
+                    csv_writer.writerow({**losses, **{'system_loss': system_loss, 'global_step': global_step}})
+                with open(f"{csv_dir}/actor_loss.csv", "a", newline="") as csvfile:    
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_actor_loss', 'global_step'])                        
+                    csv_writer.writerow({**actor_losses, **{'system_actor_loss': system_actor_loss, 'global_step': global_step}})
 
     # TRY NOT TO MODIFY: CRUCIAL step easy to overlook 
     obses = next_obses
-
-    if global_step > args.learning_starts and global_step % args.train_frequency == 0:
-        if global_step % 100 == 0:
-            # Log the data to TensorBoard
-            system_loss = sum(list(losses.values()))
-            writer.add_scalar("losses/system_td_loss/", system_loss, global_step)
-            system_actor_loss = sum(list(actor_losses.values()))
-            writer.add_scalar("losses/system_actor_loss/", system_actor_loss, global_step)
-
-            # Log data to CSV
-            with open(f"{csv_dir}/critic_loss.csv", "a", newline="") as csvfile:
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
-                csv_writer.writerow({**losses, **{'system_loss': system_loss, 'global_step': global_step}})
-            with open(f"{csv_dir}/actor_loss.csv", "a", newline="") as csvfile:    
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_actor_loss', 'global_step'])                        
-                csv_writer.writerow({**actor_losses, **{'system_actor_loss': system_actor_loss, 'global_step': global_step}})
 
     # If all agents are done, log the results and reset the evnironment to continue training
     if np.prod(list(dones.values())) or global_step % args.max_cycles == args.max_cycles-1: 
@@ -525,10 +669,25 @@ for global_step in range(args.total_timesteps):
         var_1 = 0
         cnt = 0
 
-        # Global states
-        if args.global_obs:
-            global_obs = np.hstack(list(obses.values()))
-            obses = {agent: global_obs for agent in agents}
+        if args.parameter_sharing_model:
+            # Add one hot encoding for either global observations or independent observations once the environment has been reset
+            if args.global_obs:
+                global_obs = np.hstack(list(obses.values()))
+                for agent in agents:
+                    onehot = np.zeros(num_agents)
+                    onehot[onehot_keys[agent]] = 1.0
+                    obses[agent] = np.hstack([onehot, global_obs])
+            else:
+                for agent in agents:
+                    onehot = np.zeros(num_agents)
+                    onehot[onehot_keys[agent]] = 1.0
+                    obses[agent] = np.hstack([onehot, obses[agent]])
+
+        else:
+            # Global states
+            if args.global_obs:
+                global_obs = np.hstack(list(obses.values()))
+                obses = {agent: global_obs for agent in agents}
 
         if args.render:
             env.render()

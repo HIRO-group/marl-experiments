@@ -183,6 +183,8 @@ class ReplayBuffer():
     def put(self, transition):
         self.buffer.append(transition)
     
+    # TODO: need to understand difference between sample and get here, the both appear to provide 
+    # random experience tuples
     def sample(self, n):
         mini_batch = random.sample(self.buffer, n)
         s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
@@ -203,6 +205,7 @@ class ReplayBuffer():
         mini_batch = []
         for i in mini_batch_indices:
             mini_batch.append(self.buffer[i])
+        
         s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
         
         for transition in mini_batch:
@@ -257,6 +260,8 @@ else:
  
 
 rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
+
+print(" > INITIALIZING NEURAL NETWORKS")
 for agent in agents:
     rb[agent] = ReplayBuffer(args.buffer_size)
 q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
@@ -265,8 +270,9 @@ target_network.load_state_dict(q_network.state_dict())
 optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)   
 
 loss_fn = nn.MSELoss()  # TODO: should the loss function be configurable?
-print(device.__repr__())
-print(q_network) # network of last agent
+
+print(" > Device: ",device.__repr__())
+print(" > Q_network structure: ", q_network) # network of last agent
 
 # TRY NOT TO MODIFY: start the game
 obses, _ = env.reset()
@@ -347,6 +353,7 @@ for global_step in range(args.total_timesteps):
         agent = random.choice(agents) 
         # turn = int(global_step/num_turns)%num_agents    # Pick the agent around which the minibatch will be centered
         # agent = agents[turn]
+        # TODO: why do we need dictionaries here? we're only using the experience from the random agent
         sample_batch_indices = np.random.randint(low=0, high=len(rb[agent].buffer), size=args.batch_size)
         s_obses = {}
         s_actions = {}
@@ -388,8 +395,6 @@ for global_step in range(args.total_timesteps):
     # TRY NOT TO MODIFY: CRUCIAL step easy to overlook 
     obses = next_obses
 
-    # TODO: Plotting td_loss is currently disabled for this implementation - it must be updated to suppor tracking the total loss 
-    # of the system rather than retrieving loss for a given agent
     if global_step > args.learning_starts and global_step % args.train_frequency == 0:
         if global_step % 100 == 0:
             system_loss = sum(list(losses.values()))
