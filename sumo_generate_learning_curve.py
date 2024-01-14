@@ -219,8 +219,8 @@ if __name__ == "__main__":
         csv_writer.writeheader()
 
     # Loop over all the nn files in the nn directory
-    # Every nn_save_freq steps, a new nn.pt file was saved during training
-    for saved_step in range(0, args.total_timesteps, args.nn_save_freq):
+    # Starting after training has started, every nn_save_freq steps, a new nn.pt file was saved during training 
+    for saved_step in range(args.learning_starts + args.nn_save_freq, args.total_timesteps, args.nn_save_freq):
         print(" > Loading network at learning step: {}".format(saved_step))
 
         onehot_keys = {agent: i for i, agent in enumerate(agents)}
@@ -241,7 +241,7 @@ if __name__ == "__main__":
                 observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
     
             # q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
-            q_network = Actor(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+            q_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
 
             # Load the Q-network file
             nn_file = "{}/{}.pt".format(nn_dir, saved_step)
@@ -261,7 +261,7 @@ if __name__ == "__main__":
                 q_network[agent].load_state_dict(torch.load(nn_file))
 
         # Initialize the env
-        print(" > Resetting environment")
+        print("  > Resetting environment")
         obses, _ = env.reset()
 
         # Initialize observations depending on if parameter sharing was used or not
@@ -288,7 +288,7 @@ if __name__ == "__main__":
         actions = {agent: None for agent in agents}
 
         # Simulate the environment using actions derived from the Q-Network
-        print(" > Executing policy from network")
+        print("  > Executing policy from network")
         for sumo_step in range(args.sumo_seconds):
             # Populate the action dictionary
             for agent in agents:
@@ -299,14 +299,18 @@ if __name__ == "__main__":
                 # # # else:
                 # # #     logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
                 # # # actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
+                if parameter_sharing_model:
+                    action, _, _ = q_network.get_action(obses[agent])
 
-                action, _, _ = q_network[agent].get_action(obses[agent])
+                else:
+
+                    action, _, _ = q_network[agent].get_action(obses[agent])
+
                 actions[agent] = action.detach().cpu().numpy()
-
 
             # Apply all actions to the env
             next_obses, rewards, dones, truncated, info = env.step(actions)
-
+            # print(f"   > step: {sumo_step}")
             # If the parameter sharing model was used, we have to add one hot encoding to the observations
             if parameter_sharing_model:
                 # Add one hot encoding for either global observations or independent observations
@@ -337,8 +341,8 @@ if __name__ == "__main__":
             obses = next_obses
 
             # If the simulation is done, print the episode reward and close the env
-            if np.prod(list(dones.values())):
-                print(" > Episode complete - logging data")
+            if np.prod(list(dones.values())) or (sumo_step % args.max_cycles == args.max_cycles-1):
+                print("   > Episode complete - logging data")
 
                 system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
                 
@@ -357,12 +361,12 @@ if __name__ == "__main__":
                 # Calculate ASO max at the last step of the episode
                 SPEED_LIMIT = 13.89 # TODO: config?
                 aso_max = CalculateASOMax(episode_max_speeds, SPEED_LIMIT)
-                print(" >> EPISODE ASO MAX: {} using speed limit of: {}\n".format(aso_max, SPEED_LIMIT))
+                print("    > EPISODE ASO MAX: {} using speed limit of: {}".format(aso_max, SPEED_LIMIT))
 
                 # Get the total number of cars stopped in the system at the end of the episode
                 info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info
                 system_total_stopped = info['agents_total_stopped']
-                print( " >> TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
+                print( "    > TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
 
                 # Log the episode reward to CSV
                 with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
@@ -378,8 +382,8 @@ if __name__ == "__main__":
                                                             'system_total_stopped': system_total_stopped,
                                                             'nn_step': saved_step}})
                 
-                print(" >> TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
-                print(" >>> NOTE: The reward function being used to evaluate this model may not match the reward function used to train the model")
+                print("    > TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
+                print("    > NOTE: The reward function being used to evaluate this model may not match the reward function used to train the model")
 
                 break
     

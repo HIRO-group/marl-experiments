@@ -323,7 +323,7 @@ if args.parameter_sharing_model:
     q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)         # Single q-network (i.e. "critic") for training
     target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)    # The target q-network
     target_network.load_state_dict(q_network.state_dict())                                      
-    actor_network = Actor(observation_space_shape, action_spaces[agent].n).to(device)           # Single actor network for training
+    actor_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device)        # Single actor network for training
     optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)                       # Optimizer for the critic
     actor_optimizer = optim.Adam(list(actor_network.parameters()), lr=args.learning_rate)       # Optimizer for the actor
     
@@ -378,7 +378,6 @@ print(" > Device: ",device.__repr__())
 if args.render:
     env.render()    # TODO: verify that the sumo env supports render
 
-# TODO: do we need to make changes here for parameter sharing? When running with parameter sharing, these values aren't really captured for each agent
 episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
 episode_max_speeds = {agent: [] for agent in agents}    # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
 actions = {agent: None for agent in agents}             # Dictionary that maps each agent to the action it selected
@@ -600,7 +599,7 @@ for global_step in range(args.total_timesteps):
     obses = next_obses
 
     # If all agents are done, log the results and reset the evnironment to continue training
-    if np.prod(list(dones.values())) or global_step % args.max_cycles == args.max_cycles-1: 
+    if np.prod(list(dones.values())) or (global_step % args.max_cycles == args.max_cycles-1): 
         system_episode_reward = sum(list(episode_rewards.values()))         # Accumulated reward of all agents
 
         # Calculate the maximum of all max speeds observed from each agent during the episode
