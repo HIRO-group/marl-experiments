@@ -45,6 +45,9 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 # Config Parser
 from MARLConfigParser import MARLConfigParser
 
+from actor_critic import QNetwork, Actor, one_hot_q_values
+from linear_schedule import LinearSchedule
+
 if __name__ == "__main__":
     
     # Get config parameters                        
@@ -183,6 +186,7 @@ for agent in agents:
 #     env = Monitor(env, f'videos/{experiment_name}')
 
 # modified from https://github.com/seungeunrho/minimalRL/blob/master/dqn.py#
+# TODO: move to separate file
 class ReplayBuffer():
     def __init__(self, buffer_limit):
         self.buffer = collections.deque(maxlen=buffer_limit)
@@ -205,83 +209,6 @@ class ReplayBuffer():
         return np.array(s_lst), np.array(a_lst), \
                np.array(r_lst), np.array(s_prime_lst), \
                np.array(done_mask_lst)
-
-# ALGO LOGIC: initialize agent here:
-# This is the Critic
-class QNetwork(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim):
-        super(QNetwork, self).__init__()
-        hidden_size = 64    # TODO: should we make this a config parameter?
-        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-    def forward(self, x):
-        x = torch.Tensor(x).to(device)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-# Define the Actor class
-# Based on implementation from here: https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py
-class Actor(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim):
-        super(Actor, self).__init__()
-        hidden_size = 64
-        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        logits = self.fc3(x)
-        return logits
-    
-    def get_action(self, x):
-        x = torch.Tensor(x).to(device)
-        logits = self.forward(x)
-        # Note that this is equivalent to what used to be called multinomial 
-        # policy_dist.probs here will produce the same thing as softmax(logits)
-        policy_dist = Categorical(logits=logits)
-        action = policy_dist.sample()
-
-        # Action probabilities for calculating the adapted loss
-        action_probs = policy_dist.probs
-        log_prob = F.log_softmax(logits, dim=-1)
-
-        return action, log_prob, action_probs
-
-
-
-def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
-    '''
-    Defines a schedule for decaying epsilon during the training procedure
-    '''
-    slope =  (end_e - start_e) / duration
-    return max(slope * t + start_e, end_e)
-
-
-def one_hot_q_values(q_values):
-    '''
-    Convert a tensor of q_values to one-hot encoded tensors
-    For example if Q(s,a) = [0.1, 0.5, 0.7] for a in A then
-    this function should return [0, 0, 1]
-    '''
-    # print(" >>>> q_values shape: {}".format(q_values.shape))
-    one_hot_values = np.zeros(q_values.shape)
-
-    for idx in range(len(q_values)):
-
-        # Find index of max Q(s,a)
-        max_idx = torch.argmax(q_values[idx])
-
-        # Set the value corresponding to this index to 1
-        one_hot_values[idx, max_idx] = 1.0
-
-    # Convert np array to tensor before returning
-    return torch.from_numpy(one_hot_values)
 
 
 # TRY NOT TO MODIFY: start the game
@@ -330,8 +257,6 @@ if args.parameter_sharing_model:
     print(f" >> Observation space shape: {observation_space_shape}".format(observation_space_shape))
     print(f" >> Actionspace shape: {action_spaces[agent].n}")    
     print(f" >> Q-network structure: { q_network}") 
-
-
 
 
 else:
@@ -391,7 +316,7 @@ cnt = 0
 for global_step in range(args.total_timesteps):
 
     # ALGO LOGIC: put action logic here
-    epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
+    epsilon = LinearSchedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
 
     # Set the action for each agent
     for agent in agents:
