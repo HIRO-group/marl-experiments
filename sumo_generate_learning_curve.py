@@ -33,6 +33,7 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
+from actor_critic import Actor, QNetwork
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -40,64 +41,6 @@ if 'SUMO_HOME' in os.environ:
     sys.path.append(tools)
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
-
-
-# # TODO: this should probably just go in its own file so it's consistent across all training
-# # TODO: May need to update this for actor critic, actor and critic should have the same "forward" structure
-# class QNetwork(nn.Module):
-#     def __init__(self, observation_space_shape, action_space_dim, parameter_sharing_model=False):
-#         super(QNetwork, self).__init__()
-#         self.parameter_sharing_model = parameter_sharing_model
-#         # Size of model depends on if parameter sharing was used or not
-#         if self.parameter_sharing_model:
-#             hidden_size = num_agents * 64
-#         else:
-#             hidden_size = 64    # TODO: should we make this a config parameter?
-#         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-#         self.fc2 = nn.Linear(hidden_size, hidden_size)
-#         self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-#     def forward(self, x):
-#         x = torch.Tensor(x).to(device)
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         x = self.fc3(x)
-#         return x
-
-# TODO: add config flag to indicate if the Actor model or the critic model should be evaluated (each actor-critic model includes model snapshots of both the actor and critic networks)
-# Define the Actor class
-# Based on implementation from here: https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py
-class Actor(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim):
-        super(Actor, self).__init__()
-        hidden_size = 64
-        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        # print(">> SHAPE OF X: {}".format(x.shape))
-        logits = self.fc3(x)
-        # print(">> SHAPE OF LOGITS: {}".format(logits.shape))
-        return logits
-    
-    def get_action(self, x):
-        x = torch.Tensor(x).to(device)
-        logits = self.forward(x)
-        # Note that this is equivalent to what used to be called multinomial 
-        # policy_dist.probs here will produce the same thing as softmax(logits)
-        policy_dist = Categorical(logits=logits)
-        # policy_dist = F.softmax(logits)
-        # print(" >>> Categorical: {}".format(policy_dist.probs))
-        # print(" >>> softmax: {}".format(F.softmax(logits)))
-        action = policy_dist.sample()
-        # Action probabilities for calculating the adapted loss
-        action_probs = policy_dist.probs
-        log_prob = F.log_softmax(logits, dim=-1)
-        # return action, torch.transpose(log_prob, 0, 1), action_probs
-        return action, log_prob, action_probs
 
 
 def CalculateASOMax(episode_max_speeds, speed_limit):
@@ -137,7 +80,8 @@ def CalculateASOMax(episode_max_speeds, speed_limit):
 
 if __name__ == "__main__":
 
-    # Get config parameters                        
+    # Get config parameters    
+    # TODO: add config flag to indicate if the Actor model or the critic model should be evaluated (each actor-critic model includes model snapshots of both the actor and critic networks)                    
     parser = MARLConfigParser()
     args = parser.parse_args()
     

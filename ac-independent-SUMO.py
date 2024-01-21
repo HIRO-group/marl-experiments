@@ -347,10 +347,10 @@ for global_step in range(args.total_timesteps):
                 onehot[onehot_keys[agent]] = 1.0
                 next_obses[agent] = np.hstack([onehot, global_next_obs])
         else:
-            for agent in agents:
-                onehot = np.zeros(num_agents)
-                onehot[onehot_keys[agent]] = 1.0
-                next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+                for agent in agents:
+                    onehot = np.zeros(num_agents)
+                    onehot[onehot_keys[agent]] = 1.0
+                    next_obses[agent] = np.hstack([onehot, next_obses[agent]])
 
     else:
         # Global states
@@ -380,6 +380,7 @@ for global_step in range(args.total_timesteps):
 
         if args.parameter_sharing_model:
             # Randomly sample an agent to use to calculate the estimated state-action values
+            # NOTE: Observations pulled from the replay buffer have one-hot encoding applied to them already
             agent = random.choice(agents)
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
 
