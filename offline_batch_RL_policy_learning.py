@@ -241,8 +241,16 @@ def NormalizeDataset(dataset:dict,
 
         total_c_g1 += C_g1
         total_c_g2 += C_g2
-    print(f"   >>> total_c_g1 = {total_c_g1}")
-    print(f"   >>> total_c_g2 = {total_c_g2}")
+        print(f"  >> Agent: {agent}")
+        print(f"   >>> C_g1 = {C_g1}")
+        print(f"   >>> C_g2 = {C_g2}")
+
+        print(f"   >>> G_1 = {G_1}")
+        print(f"   >>> G_2 = {G_2}")
+
+    # These can be thought of as the constraints to show on the plots from online rollouts
+    print(f" > total_c_g1 = {total_c_g1}")  
+    print(f" > total_c_g2 = {total_c_g2}")
 
     return normalized_dataset
 
@@ -1752,6 +1760,7 @@ if __name__ == "__main__":
 
     # Normalize the constraint values in the dataset
     constraint_ratio = 0.25  # TODO: config
+    # constraint_ratio = 0.5
     # constraint_ratio = -0.25
     # constraint_ratio = 0.0
     normalized_dataset = NormalizeDataset(dataset, constraint_ratio=constraint_ratio)
