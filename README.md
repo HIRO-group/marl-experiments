@@ -2,8 +2,14 @@
 
 A repsitory for conducting multi-agent reinforcement learning experiments. 
 
-# Instructions
+# Getting Started
 
+## Requirements
+- Python 3.10.11
+- Conda 23.7.2
+  
+## Instructions
+(Tesed using Ubuntu 20.04)
  1. Create the Conda environment from the `environment.yml` file. This will install all the necessary python dependencies on your system.
     ```
     conda env create -f environment.yml
@@ -21,22 +27,29 @@ A repsitory for conducting multi-agent reinforcement learning experiments.
     ```
     conda activate mqop
     ```
- 4. Specify the number of agents, the seed, and the GPU ID when running the scripts. Each script is self-contained. An example is provided.
+ 4. It is possible to run experiments using command line arguments, but to make it easier to define experiments and maintain tracability for data processing, configurations are defined using configuration files. These files are then passed to the desired module via command line. For example, to run the actor-critic single objective learning algorithm:
     ```
-    python dqn-indpendent-ps.py --gym-id mpe.simple_spread_v2 --N 5 --seed 5 --gpu-id 0 --learning-starts 10000
+    python ac-indpendent-SUMO.py -c experiments/sumo-4x4-dqn-independent.config
     ```
-    Configuration file support has been added to make command line arguments easier to use and traceable across experiments. Configuration files can be used in the following manner:
+    NOTE: some files contain the "SUMO" suffix. This indicates that this file was speicifally updated to support using the `sumo-rl` environment but it should still be compatible with other PettingZoo environments as well. Likewise, it should also be possible to use the `sumo-rl` environment with a module that does not contain the "SUMO" suffix. For example, to run the independent DQN with parameter sharing module using a `sumo-rl` configured experiment:
+     ```
+    python dqn-indpendent-ps.py -c experiments/sumo-2x2-ac-independent-ps.config
     ```
-    python dqn-indpendent-SUMO.py -c experiments/sumo-4x4-dqn-independent.config
-    ```
- 5. The experiment results are logged in the `csv` directory. Alternatively, the results can be viewed with TensorBoard. (Please [install tensorboard](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.tensorboard) to use this feature).
+     In the future, the "SUMO" suffix will be removed from file names.
+ 6. The experiment results are logged in the `csv` directory. Alternatively, the results can be viewed with TensorBoard. (Please [install tensorboard](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.tensorboard) to use this feature).
     ```
     tensorboard --logdir runs/
     ```
 
 # Configuring an Experiment
-
+Currently, all experiments are configured to utilize the `sumo-rl` environment but this can be changed by leveraging the `gym-id` configuration parameter.
 See [here](https://github.com/HIRO-group/marl-experiments/tree/main/experiments) for examples of experiment configurations.
+
+## Configuration Parameter Definitions
+Coming soon...
+
+# List of Implemented Algorithms
+Coming soon...
 
 # Environments
 
