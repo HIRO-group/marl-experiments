@@ -66,18 +66,27 @@ def CalculateMaxSpeedOverage(max_speed:float, speed_limit:float) -> float:
 
 def GenerateDataset(env: sumo_rl.parallel_env, 
                     list_of_policies: list,
-                    optimal_action_ratio:float = 0.8, 
+                    exceess_speed_action_ratio:float = 0.4,
+                    queue_action_ratio:float = 0.4, 
                     num_episodes:int=100, 
                     episode_steps:int=1000,
                     parameter_sharing_model:bool=False) -> dict:
     """
     :param env: The sumo environment
     :param list_of_policies: A list of trained neural networks used to generate the dataset by acting in the environment
-    :param optimal_action_ratio: Number specifying the fraction of time in which an optimal action should be taken
-            e.g. 0.8 of all actions should be "optimal" (according to the provdied q_network), 0.2 of all actions
-            will therefore be random
+        NOTE: This function assumes that the list of policies is ordered like [excess_speed_model, queue_model]
+    :param excess_speed_action_ratio: The fraction of actions that should come from the queue policy when generating  
+            the dataset, if excess_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
+            will come from a completely random policy e.g. if 0.4 all actions come from "excess speed" and 0.4 come from
+            "queue" then 0.2 of all actions will be random
+    :param queue_action_ratio: The fraction of actions that should come from the queue policy when generating the 
+            dataset, if excess_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
+            will come from a completely random policy e.g. if 0.4 all actions come from "excess speed" and 0.4 come from
+            "queue" then 0.2 of all actions will be random
     :param num_episodes: number of episodes to run to populate the dataset
     :param episode_steps: number of steps to take in each episode
+    :param parameter_sharing_model: Flag indicating if parameter sharing was used to generate the policies that are
+            being used to generate the dataset, if yes, each agent will still get its own unique dataset
     :returns a dictionary that maps each agent to 
     """
     print(f"  >> Generating dataset with {num_episodes} episodes of {episode_steps} steps")
@@ -87,6 +96,8 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     SPEED_OVERAGE_THRESHOLD = 13.89 # TODO: config
     agents = env.possible_agents
     num_agents = len(agents)
+    optimal_action_ratio = exceess_speed_action_ratio + queue_action_ratio  # Ratio of optimal actions that should be in this dataset
+
     onehot_keys = {agent: i for i, agent in enumerate(agents)}
 
     # Initialize the dataset as a dictionary that maps agents to Dataset objects that are full of experience
@@ -120,13 +131,15 @@ def GenerateDataset(env: sumo_rl.parallel_env,
             # Set the action for each agent
             for agent in agents:
                 random_number = random.random()
-                if (random_number < (1-optimal_action_ratio)):
+    
+                # Select which policy to use according to the provided action ratios
+                q_network = np.random.choice(['random'] + list_of_policies, 1, p=[1-optimal_action_ratio, exceess_speed_action_ratio, queue_action_ratio])[0]
+
+                if (q_network == 'random'):
+                    # Use a random action
                     actions[agent] = action_spaces[agent].sample()
+
                 else:
-
-                    # Give equal probability to each of the provided policies
-                    q_network = random.choice(list_of_policies)
-
                     # Actor choses the actions
                     action, _, _ = q_network[agent].to(device).get_action(obses[agent])
                     actions[agent] = action.detach().cpu().numpy()
@@ -523,10 +536,10 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # Perform offline rollouts using each value function and a small portion of the provided dataset
         # NOTE: The returns here are dictionaries that map agents to their return
         # TODO: update these for PS
-        print(f">>> EVALUATING G1_pi IN OFFLINE ROLLOUT")
+        print(f" > EVALUATING G1_pi IN OFFLINE ROLLOUT")
         g1_returns = PerformOfflineRollout(G1_pi, policies, rollout_mini_dataset)
 
-        print(f">>> EVALUATING G2_pi IN OFFLINE ROLLOUT")
+        print(f" > EVALUATING G2_pi IN OFFLINE ROLLOUT")
         g2_returns = PerformOfflineRollout(G2_pi, policies, rollout_mini_dataset)
         # TODO: perform some kind of similar rollout for the dataset policies to compare?
 
@@ -564,10 +577,10 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
             csv_writer.writerow({**new_row})
 
         # Now run some online rollouts to compare performance between the learned policy and the dataset policy
-        print(f" >> Performing online rollout for mean policy")
+        print(f" > Performing online rollout for mean policy")
         mean_policy_sys_return, mean_policy_g1_return, mean_policy_g2_return = PerformRollout(env, prev_mean_policies, config_args)
         
-        print(f" >> Performing online rollout for current learned policy")
+        print(f" > Performing online rollout for current learned policy")
         current_policy_sys_return, current_policy_g1_return, current_policy_g2_return = PerformRollout(env, policies, config_args)
         
         # TODO: make this more generic
@@ -1448,11 +1461,11 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
     # (note this needs to match what is used in GenerateDataset)
     SPEED_OVERAGE_THRESHOLD = 13.89
 
-    # This function assumes that the environment is set up with the 'queue' reward so if that's not the case
-    # we need to return an error
+    # This function assumes that the environment is set up with the 'queue' reward so if that's not the case 
+    # just remind the user
     if (config_args.sumo_reward != 'queue'):
-        print(f"ERROR: Cannot evaluate constraints while performing rollout with environment configured with '{config_args.sumo_reward}'")
-        return {}, {}, {}
+        print(f"  > WARNING: Reward '{config_args.sumo_reward}' specified but being ignored\n" \
+              f"    > Online rollout being performed with 'queue' reward.") 
 
     # Define empty dictionary that maps agents to actions
     actions = {agent: None for agent in agents}
@@ -1544,7 +1557,7 @@ def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)
         
         # Add up the max values of all states from the mini dataset
         cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
-        print(f" >>>> cumulative_return for agent '{agent}': {cumulative_return[agent]}")
+        print(f"   > cumulative_return for agent '{agent}': {cumulative_return[agent]}")
 
     return cumulative_return
 
@@ -1619,9 +1632,11 @@ if __name__ == "__main__":
 
     # Create the env
     # Sumo must be created using the sumo-rl module
-    # Note we have to use the parallel env here to conform to this implementation of dqn
-    print(f"  > Setting up environment with standard reward: {args.sumo_reward}")
-    print(f"   > This is to ensure that the 'g1' constraint always corresponds to speed threshold and the 'g2' constraint corresponds to queue length")
+    # NOTE: we have to use the parallel env here to conform to this implementation of dqn
+    if (args.sumo_reward != "queue"):
+        print(f"  > WARNING: Reward '{args.sumo_reward}' specified but being ignored")
+    print(f"  > Setting up environment with standard 'queue' reward")
+    print(f"    > This is to ensure that the 'g1' constraint always corresponds to speed threshold and the 'g2' constraint corresponds to queue length")
     # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
     env = sumo_rl.parallel_env(net_file=args.net, 
                             route_file=args.route,
@@ -1631,7 +1646,7 @@ if __name__ == "__main__":
                             num_seconds=args.sumo_seconds,  # TODO: for some reason, the env is finishing after 1000 seconds
                             add_system_info=True,
                             add_per_agent_info=True,
-                            reward_fn=args.sumo_reward,
+                            reward_fn='queue',
                             observation_class=CustomObservationFunction,
                             sumo_warnings=False)
 
@@ -1708,7 +1723,7 @@ if __name__ == "__main__":
             speed_overage_model_policies[agent].load_state_dict(torch.load(nn_speed_overage_file))
             print(" > Loading NN from file: {} for dataset generation".format(nn_speed_overage_file))
 
-
+    # List of policies is [speed_overage, queue] - the order is imporant
     list_of_policies.append(speed_overage_model_policies)
     list_of_policies.append(queue_model_policies)
 
@@ -1740,9 +1755,11 @@ if __name__ == "__main__":
         os.makedirs(dataset_save_dir)
     
         # We need to generate the dataset
+        # TODO: add these arguments to config file
         dataset = GenerateDataset(env, 
                               list_of_policies, 
-                              optimal_action_ratio=0.8, 
+                              exceess_speed_action_ratio=0.4,
+                              queue_action_ratio=0.4, 
                               num_episodes=50,   
                               episode_steps=args.sumo_seconds,
                               parameter_sharing_model=args.parameter_sharing_model)
