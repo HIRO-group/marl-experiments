@@ -6,6 +6,9 @@ Description:
     policies to learn a new policy that is optimal according to some objective function and also obeys some secondary constraints. 
     This algorithm is essentially decentralized
 
+    NOTE: 
+    This file generates logs in .\batch_offline_RL_logs\<experiment>
+    
 Usage:
     python offline_batch_RL_policy_learning.py -c experiments/sumo-2x2-ac-independent.config    
 
@@ -687,7 +690,6 @@ def FittedQIteration(observation_spaces:dict,
     :returns A dictionary that maps each agent to its learned policy
     """
     
-    # TODO: implement
     if config_args.global_obs:
         print("ERROR: global observations not supported for FittedQIteration")
         return {}

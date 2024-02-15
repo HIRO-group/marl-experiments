@@ -8,6 +8,9 @@ Description:
     here as it is in the training process but here agents are not allowed to take epsilon-random actions 
     (actions are chosen soley from the model's policy). 
 
+    NOTE: 
+    This file generates logs in .\analysis\<name of nn directory>\<experiment>
+    
 Usage:
     python sumo_generate_learning_curve.py -c experiments/sumo-2x2-ac-independent.config    
 """
@@ -81,12 +84,13 @@ def CalculateASOMax(episode_max_speeds, speed_limit):
 if __name__ == "__main__":
 
     # Get config parameters    
-    # TODO: add config flag to indicate if the Actor model or the critic model should be evaluated (each actor-critic model includes model snapshots of both the actor and critic networks)                    
+    # TODO: add config flag to indicate if the Actor model or the critic model should be evaluated 
+    # (each actor-critic model includes model snapshots of both the actor and critic networks)                    
     parser = MARLConfigParser()
     args = parser.parse_args()
     
     # Create CSV file to store the data
-    nn_directory = args.nn_directory        
+    nn_directory = args.nn_directory     # TODO: just use nn_dir instead???   
     nn_dir = f"{nn_directory}"           # Name of directory where the nn was stored during training    
     analysis_time = str(datetime.now()).split('.')[0].replace(':','-')
     csv_dir = f"analysis/{nn_directory+analysis_time}"

@@ -8,7 +8,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 import argparse
 from distutils.util import strtobool
-import collections
 import numpy as np
 import gym
 from gym.wrappers import TimeLimit, Monitor
@@ -18,6 +17,9 @@ import random
 import os
 import csv
 import pettingzoo
+
+from replay_buffer import ReplayBuffer
+from linear_schedule import LinearSchedule
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='DQN agent')
@@ -146,31 +148,9 @@ for agent in agents:
 if args.capture_video:
     env = Monitor(env, f'videos/{experiment_name}')
 
-# modified from https://github.com/seungeunrho/minimalRL/blob/master/dqn.py#
-class ReplayBuffer():
-    def __init__(self, buffer_limit):
-        self.buffer = collections.deque(maxlen=buffer_limit)
-    
-    def put(self, transition):
-        self.buffer.append(transition)
-    
-    def sample(self, n):
-        mini_batch = random.sample(self.buffer, n)
-        s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
-        
-        for transition in mini_batch:
-            s, a, r, s_prime, done_mask = transition
-            s_lst.append(s)
-            a_lst.append(a)
-            r_lst.append(r)
-            s_prime_lst.append(s_prime)
-            done_mask_lst.append(done_mask)
 
-        return np.array(s_lst), np.array(a_lst), \
-               np.array(r_lst), np.array(s_prime_lst), \
-               np.array(done_mask_lst)
-
-# ALGO LOGIC: initialize agent here:
+# TODO: THis file needs to be updated more before we can replace this QNetwork class with the one 
+# in actor_critic.py (notice the size of the hidden layer)
 class QNetwork(nn.Module):
     def __init__(self, observation_space_shape, action_space_dim):
         super(QNetwork, self).__init__()
@@ -185,10 +165,6 @@ class QNetwork(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-
-def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
-    slope =  (end_e - start_e) / duration
-    return max(slope * t + start_e, end_e)
 
 
 observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
@@ -222,7 +198,7 @@ cnt = 0
 for global_step in range(args.total_timesteps):
 
     # ALGO LOGIC: put action logic here
-    epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
+    epsilon = LinearSchedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
 
     if random.random() < epsilon:
         action = np.random.randint(action_space_shape)

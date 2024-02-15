@@ -24,7 +24,6 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.categorical import Categorical
 
 from distutils.util import strtobool
-import collections
 import numpy as np
 
 # # TODO: fix conda environment to include the version of gym that has Monitor module
@@ -47,6 +46,7 @@ from MARLConfigParser import MARLConfigParser
 
 from actor_critic import QNetwork, Actor, one_hot_q_values
 from linear_schedule import LinearSchedule
+from replay_buffer import ReplayBuffer
 
 if __name__ == "__main__":
     
@@ -185,32 +185,6 @@ for agent in agents:
 # if args.capture_video:
 #     env = Monitor(env, f'videos/{experiment_name}')
 
-# modified from https://github.com/seungeunrho/minimalRL/blob/master/dqn.py#
-# TODO: move to separate file
-class ReplayBuffer():
-    def __init__(self, buffer_limit):
-        self.buffer = collections.deque(maxlen=buffer_limit)
-    
-    def put(self, transition):
-        self.buffer.append(transition)
-    
-    def sample(self, n):
-        mini_batch = random.sample(self.buffer, n)
-        s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
-        
-        for transition in mini_batch:
-            s, a, r, s_prime, done_mask = transition
-            s_lst.append(s)
-            a_lst.append(a)
-            r_lst.append(r)
-            s_prime_lst.append(s_prime)
-            done_mask_lst.append(done_mask)
-
-        return np.array(s_lst), np.array(a_lst), \
-               np.array(r_lst), np.array(s_prime_lst), \
-               np.array(done_mask_lst)
-
-
 # TRY NOT TO MODIFY: start the game
 print(f" > Initializing environment")
 obses, _ = env.reset()
@@ -316,6 +290,7 @@ cnt = 0
 for global_step in range(args.total_timesteps):
 
     # ALGO LOGIC: put action logic here
+    # Inflate/Deflate the total number of timesteps based on the exploration fraction 
     epsilon = LinearSchedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
 
     # Set the action for each agent

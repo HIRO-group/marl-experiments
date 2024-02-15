@@ -25,7 +25,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-import configargparse
 from distutils.util import strtobool
 import collections
 import numpy as np
@@ -41,6 +40,8 @@ import sumo_rl
 import sys
 from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
+from linear_schedule import LinearSchedule
+from actor_critic import QNetwork
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
@@ -220,32 +221,6 @@ class ReplayBuffer():
                np.array(r_lst), np.array(s_prime_lst), \
                np.array(done_mask_lst)
 
-# ALGO LOGIC: initialize agent here:
-class QNetwork(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim):
-        super(QNetwork, self).__init__()
-        hidden_size = 64 # TODO: should we make this a config parameter?
-        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size, bias=True)
-        self.fc2 = nn.Linear(hidden_size, hidden_size, bias=True)
-        self.fc3 = nn.Linear(hidden_size, action_space_dim, bias=True)
-
-    def forward(self, x):
-        '''
-        Propagate an observation through the Q network to produce a function that of an action
-        '''
-        x = torch.Tensor(x).to(device)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        
-        return x
-
-def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
-    '''
-    Defines a schedule for decaying epsilon during the training procedure
-    '''
-    slope =  (end_e - start_e) / duration
-    return max(slope * t + start_e, end_e)
 
 # Initialize data structures for training
 eg_agent = agents[0]
@@ -307,7 +282,7 @@ num_turns = 1
 for global_step in range(args.total_timesteps):
 
     # ALGO LOGIC: put action logic here
-    epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
+    epsilon = LinearSchedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
 
     for agent in agents:
         if random.random() < epsilon:

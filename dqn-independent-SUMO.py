@@ -46,6 +46,9 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
+from actor_critic import QNetwork
+from linear_schedule import LinearSchedule
+from replay_buffer import ReplayBuffer
 
 
 if __name__ == "__main__":
@@ -184,52 +187,6 @@ for agent in agents:
 # if args.capture_video:
 #     env = Monitor(env, f'videos/{experiment_name}')
 
-# modified from https://github.com/seungeunrho/minimalRL/blob/master/dqn.py#
-class ReplayBuffer():
-    def __init__(self, buffer_limit):
-        self.buffer = collections.deque(maxlen=buffer_limit)
-    
-    def put(self, transition):
-        self.buffer.append(transition)
-    
-    def sample(self, n):
-        mini_batch = random.sample(self.buffer, n)
-        s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
-        
-        for transition in mini_batch:
-            s, a, r, s_prime, done_mask = transition
-            s_lst.append(s)
-            a_lst.append(a)
-            r_lst.append(r)
-            s_prime_lst.append(s_prime)
-            done_mask_lst.append(done_mask)
-
-        return np.array(s_lst), np.array(a_lst), \
-               np.array(r_lst), np.array(s_prime_lst), \
-               np.array(done_mask_lst)
-
-# ALGO LOGIC: initialize agent here:
-class QNetwork(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim):
-        super(QNetwork, self).__init__()
-        hidden_size = 64    # TODO: should we make this a config parameter?
-        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-    def forward(self, x):
-        x = torch.Tensor(x).to(device)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
-    '''
-    Defines a schedule for decaying epsilon during the training procedure
-    '''
-    slope =  (end_e - start_e) / duration
-    return max(slope * t + start_e, end_e)
 
 # Initialize data structures for training
 rb = {} # Dictionary for storing replay buffers (maps agent to a replay buffer)
@@ -272,7 +229,7 @@ cnt = 0
 for global_step in range(args.total_timesteps):
 
     # ALGO LOGIC: put action logic here
-    epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
+    epsilon = LinearSchedule(args.start_e, args.end_e, args.exploration_fraction*args.total_timesteps, global_step)
 
     # Set the action for each agent
     for agent in agents:
