@@ -179,61 +179,250 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
     return dataset
 
+def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
+                                  policies_to_use:dict,
+                                  reward_to_evaluate:str,
+                                  config_args) -> float:
+    """
+    Run a rollout episode in the SUMO environment using a provided policy, calcualte and return a metric averaged per step across
+    all agents
+
+    :param queue_length_env: The SUMO environment to execute the policy in, assumes that the reward has been set to "queue"
+    :param policies_to_use: Dictionary that maps agents to "actor" models to use for the evaluation
+    :param reward_to_evaluate: Either "queue" or "speed_overage", determines which metric to compute during the episode
+    :param config_args: Configuration arguments used to set up the experiment
+    :returns: Either average "queue" reward per step (averaged for all agents) or average "speed overage" reward per step 
+            (averaged for all agents)
+    """
+    # TODO: update function to support global observations
+    
+    # Determine if a proper reward evaluation was requested
+    if (reward_to_evaluate != 'speed_overage') and (reward_to_evaluate != 'queue'):
+        print(f"  > ERROR: Unrecognized reward evaluation '{reward_to_evaluate}' requested")
+        print(f"  > Function only supports 'speed_overage' or 'queue'")
+        return 0.0
+    
+
+    # Define the speed overage threshold used to evaluate the g1 constraint 
+    # (note this needs to match what is used in GenerateDataset)
+    SPEED_OVERAGE_THRESHOLD = 13.89
+
+    agents = queue_length_env.possible_agents
+
+    # Define empty dictionary that maps agents to actions
+    actions = {agent: None for agent in agents}
+
+    # Dictionary that maps the each agent to its cumulative reward each episode
+    episode_rewards = {agent: 0.0 for agent in agents}            
+
+    # Maps each agent to its MAX SPEED OVERAGE for this step        
+    episode_constraint_1 = {agent : 0.0 for agent in agents}  
+    
+    # Maps each agent to the accumulated NUBMER OF CARS STOPPED for episode
+    episode_constraint_2 = {agent : 0.0 for agent in agents}  
+
+    # Initialize the env
+    obses, _ = queue_length_env.reset()
+
+    if config_args.parameter_sharing_model:
+        # Apply one-hot encoding to the initial observations
+        onehot_keys = {agent: i for i, agent in enumerate(agents)}
+
+        for agent in agents:
+            onehot = np.zeros(num_agents)
+            onehot[onehot_keys[agent]] = 1.0
+            obses[agent] = np.hstack([onehot, obses[agent]])
+
+    # Perform the rollout
+    for sumo_step in range(config_args.sumo_seconds):
+        # Populate the action dictionary
+        for agent in agents:
+            # Only use optimal actions according to the policy
+            action, _, _ = policies_to_use[agent].to(device).get_action(obses[agent])
+            actions[agent] = action.detach().cpu().numpy()
+
+        # Apply all actions to the env
+        next_obses, rewards, dones, truncated, info = queue_length_env.step(actions)
+
+        if np.prod(list(dones.values())):
+            break
+
+        if config_args.parameter_sharing_model:
+            # Apply one-hot encoding to the observations
+            onehot_keys = {agent: i for i, agent in enumerate(agents)}
+
+            for agent in agents:
+                onehot = np.zeros(num_agents)
+                onehot[onehot_keys[agent]] = 1.0
+                next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+
+        # Accumulate the total episode reward and max speeds
+        for agent in agents:
+            # At the end of a simulation, next_obses is an empty dictionary so don't log it 
+            # TODO: we shouldn't need the try/except step here
+            try:
+                episode_rewards[agent] += rewards[agent]        # NOTE This should be the same as episode_constraint_2 if the env was configured correctly
+                max_speed_observed_by_agent = next_obses[agent][-1]
+                episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
+                episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
+
+            except:
+                continue
+                
+        obses = next_obses
+    
+    if (reward_to_evaluate == 'speed_overage'):
+        # Average value per step for each agent
+        avg_g1s_per_step = [agent_g1_total_returns/sumo_step for agent_g1_total_returns in episode_constraint_1.values()]
+        # Average value per step averaged across all agents
+        avg_g1_per_step_per_agent = np.mean(avg_g1s_per_step)
+
+        return avg_g1_per_step_per_agent
+
+    elif (reward_to_evaluate == 'queue'):
+        # Average value per step for each agent
+        avg_g2s_per_step = [agent_g2_total_returns/sumo_step for agent_g2_total_returns in episode_constraint_2.values()]
+        # Average value per step averaged across all agents
+        avg_g2_per_step_per_agent = np.mean(avg_g2s_per_step)
+
+        return avg_g2_per_step_per_agent
+
+
 def NormalizeDataset(dataset:dict,
-                     constraint_ratio:float=0.25) -> dict:
+                     constraint_ratio:float,
+                     g1_upper_bound:float,
+                     g1_lower_bound:float) -> dict:
     """
     Function for normalizing the dataset so that the values of one constraint do not normalize the other
     :param dataset: Dictionary that maps agents to a dataset of experience tuples
-    :param constraint_ratio: The ratio to use in the weight adjustment, applied positive to g1 constraint and negative to g2 constraint
+    :param constraint_ratio: The ratio to use in the weight adjustment, used to determine where the g1 constraint 
+            should be applied between the upper and lower bounds
+    :param g1_upper_bound: Upper bound to apply to g1 values in the dataset, should be the average reward per step 
+            (avg of all agents) when evaluating the excess speed policy according to the excess speed reward
+    :param g2_lower_bound: Lower bound to apply to g1 values in the dataset, should be the average reward per step 
+            (avg of all agents) when evaluating the excess speed policy according to the excess speed reward
+
     :returns Dictionary that maps agents to normalized datasets
     """
+    # # # print(f" > Normalizing dataset constraint values")
+    # # # # Intialize dataset
+    # # # normalized_dataset = {}
+
+    # # # total_c_g1 = 0.0
+    # # # total_c_g2 = 0.0
+
+    # # # for agent in dataset.keys():
+        
+    # # #     # Initialize constraint bounds
+    # # #     C_g1 = 0.0
+    # # #     C_g2 = 0.0
+        
+    # # #     G_1 = 0.0
+    # # #     G_2 = 0.0
+
+    # # #     normalized_g1s = []
+    # # #     normalized_g2s = []
+
+    # # #     # Number of experience tuples for this agent
+    # # #     n = len(dataset[agent].buffer)
+    # # #     print(f"  >> Agent '{agent}' buffer size: {n} ")
+
+    # # #     normalized_dataset[agent] = Dataset(n)
+        
+    # # #     # Calculate the bounds for the g1 and g2 constraints
+    # # #     for i in range(n):
+    # # #         s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
+    # # #         C_g1 += s_g1s
+    # # #         C_g2 += s_g2s
+
+    # # #     C_g1 = C_g1 / n * (1.0 + constraint_ratio)
+    # # #     # C_g2 = C_g2 / n * (1.0 - constraint_ratio)    
+
+    # # #     # Now apply the bounds to the g1 and g2 observations
+    # # #     for i in range(n):
+    # # #         s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
+            
+    # # #         g1_normalized = min(C_g1, s_g1s) - C_g1
+    # # #         normalized_g1s.append(g1_normalized)
+    # # #         G_1 += g1_normalized
+
+    # # #         # g2_normalized = min(C_g2, s_g2s) - C_g2   
+    # # #         g2_normalized = s_g2s # No constraint for g2
+    # # #         normalized_g2s.append(g2_normalized)
+    # # #         G_2 += g2_normalized
+            
+    # # #     for i in range(n):
+    # # #         s_obses, s_actions, s_next_obses, _, _, s_dones = dataset[agent].buffer[i]
+            
+    # # #         # Calculate normalized g1 and g2
+    # # #         # NOTE: weirdly, the best response we have seen (both g1 and g2 reaching maximal returns) occured 
+    # # #         # without this step... 
+    # # #         # Not sure why
+    # # #         g1_n = normalized_g1s[i]/abs(G_1)
+    # # #         if g1_n > 0.0:
+    # # #             print(f" > ERROR: normalized g1 = {g1_n}, algorithm assumes g1 < 0")
+    # # #             sys.exit()
+
+    # # #         g2_n = normalized_g2s[i]/abs(G_2)
+    # # #         if g2_n > 0.0:
+    # # #             print(f" > ERROR: normalized g2 = {g2_n}, algorithm assumes g2 < 0")
+    # # #             sys.exit()
+            
+
+    # # #         # Add it to the new dataset
+    # # #         normalized_dataset[agent].put((s_obses, s_actions, s_next_obses, g1_n, g2_n, s_dones))
+
+    # # #     total_c_g1 += C_g1
+    # # #     total_c_g2 += C_g2
+    # # #     print(f"  >> Agent: {agent}")
+    # # #     print(f"   >>> C_g1 = {C_g1}")
+    # # #     print(f"   >>> C_g2 = {C_g2}")
+
+    # # #     print(f"   >>> G_1 = {G_1}")
+    # # #     print(f"   >>> G_2 = {G_2}")
+
+    # # # # These can be thought of as the constraints to show on the plots from online rollouts
+    # # # print(f" > total_c_g1 = {total_c_g1}")  
+    # # # print(f" > total_c_g2 = {total_c_g2}")
+
+
     print(f" > Normalizing dataset constraint values")
-    # Intialize dataset
     normalized_dataset = {}
 
-    total_c_g1 = 0.0
-    total_c_g2 = 0.0
+    total_g1 = 0.0
+    total_g2 = 0.0
+
+    # Calculate constraint to be applied to g1 returns
+    c1 = (g1_upper_bound - g1_lower_bound) * constraint_ratio + g1_lower_bound
+    print(f" > c1 = {c1}")  
 
     for agent in dataset.keys():
-        
-        # Initialize constraint bounds
-        C_g1 = 0.0
-        C_g2 = 0.0
-        
+
         G_1 = 0.0
         G_2 = 0.0
 
-        normalized_g1s = []
-        normalized_g2s = []
+        adjusted_g1s = []
+        adjusted_g2s = []
 
         # Number of experience tuples for this agent
         n = len(dataset[agent].buffer)
-        print(f"  >> Agent '{agent}' buffer size: {n} ")
+        print(f"   > Agent '{agent}' buffer size: {n} ")
 
         normalized_dataset[agent] = Dataset(n)
-        
-        # Calculate the bounds for the g1 and g2 constraints
-        for i in range(n):
-            s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
-            C_g1 += s_g1s
-            C_g2 += s_g2s
 
-        C_g1 = C_g1 / n * (1.0 + constraint_ratio)
-        # C_g2 = C_g2 / n * (1.0 - constraint_ratio)    
-
-        # Now apply the bounds to the g1 and g2 observations
         for i in range(n):
             s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
             
-            g1_normalized = min(C_g1, s_g1s) - C_g1
-            normalized_g1s.append(g1_normalized)
-            G_1 += g1_normalized
+            # Apply constraint to g1
+            g1 = min(c1, s_g1s) - c1
 
-            # g2_normalized = min(C_g2, s_g2s) - C_g2   
-            g2_normalized = s_g2s # No constraint for g2
-            normalized_g2s.append(g2_normalized)
-            G_2 += g2_normalized
-            
+            adjusted_g1s.append(g1)
+            G_1 += g1
+
+            adjusted_g2s.append(s_g2s)
+            G_2 += s_g2s
+
+
         for i in range(n):
             s_obses, s_actions, s_next_obses, _, _, s_dones = dataset[agent].buffer[i]
             
@@ -241,13 +430,13 @@ def NormalizeDataset(dataset:dict,
             # NOTE: weirdly, the best response we have seen (both g1 and g2 reaching maximal returns) occured 
             # without this step... 
             # Not sure why
-            g1_n = normalized_g1s[i]/abs(G_1)
-            if g1_n > 0.0:
+            g1_n = adjusted_g1s[i]/abs(G_1)
+            if (g1_n > 0.0):
                 print(f" > ERROR: normalized g1 = {g1_n}, algorithm assumes g1 < 0")
                 sys.exit()
 
-            g2_n = normalized_g2s[i]/abs(G_2)
-            if g2_n > 0.0:
+            g2_n = adjusted_g2s[i]/abs(G_2)
+            if (g2_n > 0.0):
                 print(f" > ERROR: normalized g2 = {g2_n}, algorithm assumes g2 < 0")
                 sys.exit()
             
@@ -255,18 +444,16 @@ def NormalizeDataset(dataset:dict,
             # Add it to the new dataset
             normalized_dataset[agent].put((s_obses, s_actions, s_next_obses, g1_n, g2_n, s_dones))
 
-        total_c_g1 += C_g1
-        total_c_g2 += C_g2
-        print(f"  >> Agent: {agent}")
-        print(f"   >>> C_g1 = {C_g1}")
-        print(f"   >>> C_g2 = {C_g2}")
+        total_g1 += G_1
+        total_g2 += G_2
+        print(f"  > Agent: {agent}")
 
-        print(f"   >>> G_1 = {G_1}")
-        print(f"   >>> G_2 = {G_2}")
+        print(f"    > G_1 = {G_1}")
+        print(f"    > G_2 = {G_2}")
 
     # These can be thought of as the constraints to show on the plots from online rollouts
-    print(f" > total_c_g1 = {total_c_g1}")  
-    print(f" > total_c_g2 = {total_c_g2}")
+    print(f" > total_g1 = {total_g1}")  
+    print(f" > total_g2 = {total_g2}")            
 
     return normalized_dataset
 
@@ -277,7 +464,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                     config_args,
                     nn_save_dir:str,
                     csv_save_dir:str,
-                    max_num_rounds:int=10) -> (dict, dict, list, list):
+                    max_num_rounds:int=10) -> tuple[dict, dict, list, list]:
     """
     Perform offline batch reinforcement learning
     Here we use a provided dataset to learn and evaluate a policy for a given number of "rounds"
@@ -1442,7 +1629,7 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
     return mean_constraint
 
 
-def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, dict, dict):
+def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[dict, dict, dict]:
     """
     Perform a 1-episode rollout of a provided policy to evaluate the constraint functions g1 and g2. 
     This function assumes that the environment has been set up with the 'queue' reward function when evaluating the
@@ -1462,6 +1649,8 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
     # Define the speed overage threshold used to evaluate the g1 constraint 
     # (note this needs to match what is used in GenerateDataset)
     SPEED_OVERAGE_THRESHOLD = 13.89
+
+    agents = env.possible_agents
 
     # This function assumes that the environment is set up with the 'queue' reward so if that's not the case 
     # just remind the user
@@ -1529,7 +1718,7 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->(dict, d
             except:
                 continue
                 
-            obses = next_obses
+        obses = next_obses
         
     return episode_rewards, episode_constraint_1, episode_constraint_2
 
@@ -1567,7 +1756,7 @@ def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)
 def OnlineLambdaLearning(lambda_1_prev:float, 
                          lambda_2_prev:float, 
                          g1_returns:dict, 
-                         g2_returns:dict)->(float, float):
+                         g2_returns:dict)->tuple[float, float]:
     """
     :param lambda_1_prev: The value of lambda1 at the end of the previous round
     :param lambda_2_prev: The value of lambda2 at the end of the previous round
@@ -1782,7 +1971,30 @@ if __name__ == "__main__":
     # constraint_ratio = 0.5
     # constraint_ratio = -0.25
     # constraint_ratio = 0.0
-    normalized_dataset = NormalizeDataset(dataset, constraint_ratio=constraint_ratio)
+        
+    # Calculate the upper (i.e. less negative) bound of the g1 constraint 
+    # This is the average reward per step (for all agents) of the excessive speed policy when evaluating it according 
+    # to the excessive speed (i.e. speed_overage) reward
+    g1_upper_bound = CalculateAverageRewardPerStep(queue_length_env=env,
+                                                   policies_to_use=speed_overage_model_policies,
+                                                   reward_to_evaluate='speed_overage',
+                                                   config_args=args)
+    
+    # Calculate the lower (i.e. more negative) bound of the g1 constraint  
+    # This is the average reward per step (for all agents) of the queue length policy when evaluating it according 
+    # to the excessive speed (i.e. speed_overage) reward  
+    g1_lower_bound = CalculateAverageRewardPerStep(queue_length_env=env,
+                                                   policies_to_use=queue_model_policies,
+                                                   reward_to_evaluate='speed_overage',
+                                                   config_args=args)
+    print(f" > Applying constraints to dataset")
+    print(f"   > g1_upper_bound: {g1_upper_bound}")
+    print(f"   > g1_lower_bound: {g1_lower_bound}")
+    print(f"   > constraint ratio: {constraint_ratio}")
+    normalized_dataset = NormalizeDataset(dataset, 
+                                          constraint_ratio=constraint_ratio,
+                                          g1_lower_bound=g1_lower_bound,
+                                          g1_upper_bound=g1_upper_bound)
 
     """
     Step 2:
@@ -1796,5 +2008,5 @@ if __name__ == "__main__":
                                                                 args, 
                                                                 save_dir,
                                                                 csv_save_dir,
-                                                                max_num_rounds=10)   # Lucky 7 
+                                                                max_num_rounds=20)   # Lucky 7 
 
