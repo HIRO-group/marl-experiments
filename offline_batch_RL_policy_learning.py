@@ -555,8 +555,9 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                         ['queue_policy_system_return_g2'])
         csv_writer.writeheader()
 
-    rollout_mini_dataset = {agent: dataset[agent].sample(50000) for agent in agents}    # TODO: config
-    num_agents = len(agents) 
+    # Define a "mini" dataset to be used for offline rollouts (basically this will get passed through networks to evaluate them)
+    rollout_mini_dataset = {agent: dataset[agent].sample(50000) for agent in agents}    # TODO: config, currently set to the same size as the dataset itself
+
     # Define an "example" agent that can be used as a dictionary key when the specific agent doesn't matter
     eg_agent = agents[0]    
     prev_mean_policies = {}
@@ -564,10 +565,13 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     prev_g2_constraints = {}
 
     print(f"  > Initializing neural networks")
+    num_agents = len(agents) 
+
     if config_args.parameter_sharing_model:
+        # Modify the observation space shape to include one-hot-encoding used for parameter sharing
         print(f"   > Parameter sharing enabled")
 
-        onehot_keys = {agent: i for i, agent in enumerate(agents)}
+        # onehot_keys = {agent: i for i, agent in enumerate(agents)}
         if config_args.global_obs:
             print(f"    > Global observations enabled")
             observation_space_shape = tuple((shape+1) * (num_agents) for shape in observation_spaces[eg_agent].shape)
@@ -578,6 +582,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
 
     else:
+        # Only need to modify the observation space shape if global observations are being used
         print(f"   > Parameter sharing NOT enabled")
 
         if config_args.global_obs:
@@ -636,7 +641,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     policies,
                                     dataset, 
                                     csv_save_dir,
-                                    mean_constraint_suffixes[0],
+                                    mean_constraint_suffixes[0],    # Assumes order was [g1, g2]
                                     config_args, 
                                     constraint="speed_overage")
         
@@ -655,7 +660,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     policies,
                                     dataset, 
                                     csv_save_dir,
-                                    mean_constraint_suffixes[1],
+                                    mean_constraint_suffixes[1],    # Assumes order was [g1, g2]
                                     config_args, 
                                     constraint="queue")
         
@@ -682,7 +687,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
             torch.save(mean_policies[a].state_dict(), f"{nn_save_dir}/policies/mean/policy_{t}-{a}.pt")        
 
         # Calculate 1/t*(g1 + t-1(E[g1])) for each agent
-        # TODO: Update for PS
         mean_g1_constraints = CalculateMeanConstraint(G1_pi,
                                                       prev_g1_constraints,
                                                       observation_spaces,
@@ -691,7 +695,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                       t,
                                                       dataset,
                                                       csv_save_dir,
-                                                      mean_constraint_suffixes[0],
+                                                      mean_constraint_suffixes[0],  # Assumes order was [g1, g2]
                                                       config_args)
 
         # Save the mean value function each round
@@ -709,7 +713,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                       t,
                                                       dataset,
                                                       csv_save_dir,
-                                                      mean_constraint_suffixes[1],
+                                                      mean_constraint_suffixes[1],  # Assumes order was [g1, g2]
                                                       config_args)
 
         # Save the mean value function each round
@@ -725,7 +729,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # Perform offline rollouts using each value function and a small portion of the provided dataset
         # NOTE: The returns here are dictionaries that map agents to their return
-        # TODO: update these for PS
         print(f" > EVALUATING G1_pi IN OFFLINE ROLLOUT")
         g1_returns = PerformOfflineRollout(G1_pi, policies, rollout_mini_dataset)
 
@@ -746,7 +749,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # Save the rollout returns and the updated lambdas
         with open(f"{csv_save_dir}/rollouts.csv", "a", newline="") as csvfile:
-            csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + [agent + '_return_g1' for agent in agents] + 
+            csv_writer = csv.DictWriter(csvfile, fieldnames=['round'] + 
+                                                            [agent + '_return_g1' for agent in agents] + 
                                                             ['system_return_g1'] + 
                                                             [agent + '_return_g2' for agent in agents] + 
                                                             ['system_return_g2'] +
@@ -766,7 +770,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
             csv_writer.writerow({**new_row})
 
-        # Now run some online rollouts to compare performance between the learned policy and the dataset policy
+        # Now run some online rollouts to compare performance between the learned policy and the dataset policies
         print(f" > Performing online rollout for mean policy")
         mean_policy_sys_return, mean_policy_g1_return, mean_policy_g2_return = PerformRollout(env, prev_mean_policies, config_args)
         
@@ -1728,8 +1732,10 @@ def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)
     :param value_function: Dictionary that maps agents to the learned value function for a given constraint
     :param mini_dataset: A subset of the larger dataset that contains experience tuples that are evaluated in the rollout
             using the provided dataset
-            NOTE: This function assumes the dataset has been sampled such that mini_dataset contains lists of of experience tuples for each agent
-    :returns The cummulative return for all agents of the mini dataset according to the provided value functions normalized by the size of the mini dataset
+            NOTE: This function assumes the dataset has been sampled such that mini_dataset contains lists of of experience
+            tuples for each agent
+    :returns The cummulative return for all agents of the mini dataset according to the provided value functions normalized 
+            by the size of the mini dataset
     """
     
     agents = list(value_function.keys())
@@ -1835,8 +1841,8 @@ if __name__ == "__main__":
                             max_green=args.max_green,
                             min_green=args.min_green,
                             num_seconds=args.sumo_seconds,  # TODO: for some reason, the env is finishing after 1000 seconds
-                            add_system_info=True,
-                            add_per_agent_info=True,
+                            add_system_info=True,   # Default is True
+                            add_per_agent_info=True,    # Default is True
                             reward_fn='queue',
                             observation_class=CustomObservationFunction,
                             sumo_warnings=False)
@@ -1937,11 +1943,14 @@ if __name__ == "__main__":
         contain information about the contstraint functions as well as the observations
 
         The dataset should also be generated using "optimal" actions (optimal according to the provided
-        policy) ~80% of the time and the rest of the time random actions should be used
+        policy) ~80% of the time (though this number can be changed) and the rest of the time random
+        actions should be used
     """
 
     if (args.dataset_path == ""):
+        # No dataset provided
 
+        # Path to save the dataset
         dataset_save_dir = f"{save_dir}/dataset"
         os.makedirs(dataset_save_dir)
     
@@ -1968,6 +1977,7 @@ if __name__ == "__main__":
 
     # Normalize the constraint values in the dataset
     constraint_ratio = 0.25  # TODO: config
+    # constraint_ratio = 0.75
     # constraint_ratio = 0.5
     # constraint_ratio = -0.25
     # constraint_ratio = 0.0
@@ -2001,12 +2011,11 @@ if __name__ == "__main__":
         Use the generated dataset to iteratively learn a new policy 
         Essentially we want to evaluate the new policy, E[pi] and the constraint function E[G]
     """
-    perform_rollout_comparisons = True
     mean_policies, policies, mean_lambdas, lambdas = OfflineBatchRL(env,
                                                                 normalized_dataset, 
                                                                 list_of_policies,
                                                                 args, 
                                                                 save_dir,
                                                                 csv_save_dir,
-                                                                max_num_rounds=20)   # Lucky 7 
+                                                                max_num_rounds=10)   # Lucky 7 
 
