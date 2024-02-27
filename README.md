@@ -9,7 +9,7 @@ A repsitory for conducting multi-agent reinforcement learning experiments.
 - Conda 23.7.2
   
 ## Instructions
-(Tesed using Ubuntu 20.04)
+(Tested using Ubuntu 20.04)
  1. Create the Conda environment from the `environment.yml` file. This will install all the necessary python dependencies on your system.
     ```
     conda env create -f environment.yml
@@ -36,14 +36,14 @@ A repsitory for conducting multi-agent reinforcement learning experiments.
     python dqn-indpendent-ps.py -c experiments/sumo-2x2-ac-independent-ps.config
     ```
      In the future, the "SUMO" suffix will be removed from file names.
- 6. The experiment results are logged in the `csv` directory. Alternatively, the results can be viewed with TensorBoard. (Please [install tensorboard](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.tensorboard) to use this feature).
+ 6. The experiment results are logged in the `csv` directory and named using various elements defined in the configuration file. Additionally, the results can be viewed with TensorBoard. (Please [install tensorboard](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.tensorboard) to use this feature).
     ```
     tensorboard --logdir runs/
     ```
 
 # Configuring an Experiment
-Currently, all experiments are configured to utilize the `sumo-rl` environment but this can be changed by leveraging the `gym-id` configuration parameter.
-See [here](https://github.com/HIRO-group/marl-experiments/tree/main/experiments) for examples of experiment configurations.
+Currently, all pre-defined experiment files are configured to utilize the `sumo-rl` environment but this can be changed by leveraging the `gym-id` configuration parameter.
+If you'd like to create your own experiment using a different environment and set of hyperparameters, we recommend using an existing file as a template. See [here](https://github.com/HIRO-group/marl-experiments/tree/main/experiments) for examples of experiment configurations.
 
 ## Configuration Parameter Definitions
 Coming soon...
@@ -63,7 +63,7 @@ This repository primarily conducts experiments on environments from the PettingZ
 
 ### Understanding the Reward Structure of the SUMO Environment
 
-The SUMO environment uses a default reward structure defined [here](https://github.com/LucasAlegre/sumo-rl#rewards). Maximizing the *change* in total weighting times of all vehicles at a given step may not be the most intuitive reward function. While the method of defining the "best" state of traffic may be up for debate, most experiments in this project use the `queue` reward function which returns the negative number of all vehicles stopped in the environment at the current step. Stopped vehicles are generally bad for traffic flow so the agents attempt to minimize this value.
+The SUMO environment uses a default reward structure defined [here](https://github.com/LucasAlegre/sumo-rl#rewards). Maximizing the *change* in total weighting times of all vehicles at a given step may not be the most intuitive reward function. While the method of defining the "best" state of traffic may be up for debate, most experiments in this project use the `queue` reward function which returns the negative number of all vehicles stopped in the environment at the current step. Stopped vehicles are generally bad for traffic flow so the agents attempt to minimize this value. The [wiki](https://github.com/HIRO-group/marl-experiments/wiki/SUMO-and-SUMO%E2%80%90RL-Notes) has additional notes regarding the sumo-rl environment.
 
 # Acknowledgments
 
