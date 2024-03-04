@@ -7,6 +7,7 @@ Description:
 """
 
 from sumo_rl import TrafficSignal
+import numpy as np
 
 def MaxSpeedRewardFunction(ts:TrafficSignal):
         """
@@ -32,19 +33,25 @@ def MaxSpeedRewardFunction(ts:TrafficSignal):
         if len(vehs) == 0:
             max_speed = 0.0
 
-        # Find the max speed of all vehicles in the intersection            
+        # Find the max speed of all vehicles in the intersection
+        # TODO: We could consider average speed here as well         
         for v in vehs:
             speed = ts.sumo.vehicle.getSpeed(v)
             if speed > max_speed:
                 max_speed = speed
         
-        pension = max_speed - SPEED_THRESHOLD
         
-        if pension > 0.0:
+        if max_speed > SPEED_THRESHOLD:
+            pension = max_speed - SPEED_THRESHOLD
             # If the max speed is greater than then threshold, return the negative 
             # of the pension (i.e. difference)
-            return (-1.0 * pension)
+            return (-1.0 * np.sqrt(pension))
+        
+        # TODO: make lower bound configurable?
+        elif max_speed <= 5.0: 
+            pension = SPEED_THRESHOLD - max_speed
+            return (-1.0 * np.sqrt(pension))
         
         else:
-            # If the max speed is less than the threshold, just return 0
+            # If the max speed is within the bounds, just return 0
             return 0.0

@@ -8,6 +8,9 @@ Description:
     here as it is in the training process but here agents are not allowed to take epsilon-random actions 
     (actions are chosen soley from the model's policy). 
 
+    NOTE: 
+    This file generates logs in .\analysis\<name of nn directory>\<experiment>
+    
 Usage:
     python sumo_generate_learning_curve.py -c experiments/sumo-2x2-ac-independent.config    
 """
@@ -33,6 +36,7 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
+from actor_critic import Actor, QNetwork
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -40,64 +44,6 @@ if 'SUMO_HOME' in os.environ:
     sys.path.append(tools)
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
-
-
-# # TODO: this should probably just go in its own file so it's consistent across all training
-# # TODO: May need to update this for actor critic, actor and critic should have the same "forward" structure
-# class QNetwork(nn.Module):
-#     def __init__(self, observation_space_shape, action_space_dim, parameter_sharing_model=False):
-#         super(QNetwork, self).__init__()
-#         self.parameter_sharing_model = parameter_sharing_model
-#         # Size of model depends on if parameter sharing was used or not
-#         if self.parameter_sharing_model:
-#             hidden_size = num_agents * 64
-#         else:
-#             hidden_size = 64    # TODO: should we make this a config parameter?
-#         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-#         self.fc2 = nn.Linear(hidden_size, hidden_size)
-#         self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-#     def forward(self, x):
-#         x = torch.Tensor(x).to(device)
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         x = self.fc3(x)
-#         return x
-
-# TODO: add config flag to indicate if the Actor model or the critic model should be evaluated (each actor-critic model includes model snapshots of both the actor and critic networks)
-# Define the Actor class
-# Based on implementation from here: https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py
-class Actor(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim):
-        super(Actor, self).__init__()
-        hidden_size = 64
-        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        # print(">> SHAPE OF X: {}".format(x.shape))
-        logits = self.fc3(x)
-        # print(">> SHAPE OF LOGITS: {}".format(logits.shape))
-        return logits
-    
-    def get_action(self, x):
-        x = torch.Tensor(x).to(device)
-        logits = self.forward(x)
-        # Note that this is equivalent to what used to be called multinomial 
-        # policy_dist.probs here will produce the same thing as softmax(logits)
-        policy_dist = Categorical(logits=logits)
-        # policy_dist = F.softmax(logits)
-        # print(" >>> Categorical: {}".format(policy_dist.probs))
-        # print(" >>> softmax: {}".format(F.softmax(logits)))
-        action = policy_dist.sample()
-        # Action probabilities for calculating the adapted loss
-        action_probs = policy_dist.probs
-        log_prob = F.log_softmax(logits, dim=-1)
-        # return action, torch.transpose(log_prob, 0, 1), action_probs
-        return action, log_prob, action_probs
 
 
 def CalculateASOMax(episode_max_speeds, speed_limit):
@@ -137,12 +83,14 @@ def CalculateASOMax(episode_max_speeds, speed_limit):
 
 if __name__ == "__main__":
 
-    # Get config parameters                        
+    # Get config parameters    
+    # TODO: add config flag to indicate if the Actor model or the critic model should be evaluated 
+    # (each actor-critic model includes model snapshots of both the actor and critic networks)                    
     parser = MARLConfigParser()
     args = parser.parse_args()
     
     # Create CSV file to store the data
-    nn_directory = args.nn_directory        
+    nn_directory = args.nn_directory     # TODO: just use nn_dir instead???   
     nn_dir = f"{nn_directory}"           # Name of directory where the nn was stored during training    
     analysis_time = str(datetime.now()).split('.')[0].replace(':','-')
     csv_dir = f"analysis/{nn_directory+analysis_time}"
@@ -219,8 +167,8 @@ if __name__ == "__main__":
         csv_writer.writeheader()
 
     # Loop over all the nn files in the nn directory
-    # Every nn_save_freq steps, a new nn.pt file was saved during training
-    for saved_step in range(0, args.total_timesteps, args.nn_save_freq):
+    # Starting after training has started, every nn_save_freq steps, a new nn.pt file was saved during training 
+    for saved_step in range(args.learning_starts + args.nn_save_freq, args.total_timesteps, args.nn_save_freq):
         print(" > Loading network at learning step: {}".format(saved_step))
 
         onehot_keys = {agent: i for i, agent in enumerate(agents)}
@@ -241,7 +189,7 @@ if __name__ == "__main__":
                 observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
     
             # q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
-            q_network = Actor(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+            q_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
 
             # Load the Q-network file
             nn_file = "{}/{}.pt".format(nn_dir, saved_step)
@@ -261,7 +209,7 @@ if __name__ == "__main__":
                 q_network[agent].load_state_dict(torch.load(nn_file))
 
         # Initialize the env
-        print(" > Resetting environment")
+        print("  > Resetting environment")
         obses, _ = env.reset()
 
         # Initialize observations depending on if parameter sharing was used or not
@@ -288,7 +236,7 @@ if __name__ == "__main__":
         actions = {agent: None for agent in agents}
 
         # Simulate the environment using actions derived from the Q-Network
-        print(" > Executing policy from network")
+        print("  > Executing policy from network")
         for sumo_step in range(args.sumo_seconds):
             # Populate the action dictionary
             for agent in agents:
@@ -299,14 +247,18 @@ if __name__ == "__main__":
                 # # # else:
                 # # #     logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
                 # # # actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
+                if parameter_sharing_model:
+                    action, _, _ = q_network.get_action(obses[agent])
 
-                action, _, _ = q_network[agent].get_action(obses[agent])
+                else:
+
+                    action, _, _ = q_network[agent].get_action(obses[agent])
+
                 actions[agent] = action.detach().cpu().numpy()
-
 
             # Apply all actions to the env
             next_obses, rewards, dones, truncated, info = env.step(actions)
-
+            # print(f"   > step: {sumo_step}")
             # If the parameter sharing model was used, we have to add one hot encoding to the observations
             if parameter_sharing_model:
                 # Add one hot encoding for either global observations or independent observations
@@ -337,8 +289,8 @@ if __name__ == "__main__":
             obses = next_obses
 
             # If the simulation is done, print the episode reward and close the env
-            if np.prod(list(dones.values())):
-                print(" > Episode complete - logging data")
+            if np.prod(list(dones.values())) or (sumo_step % args.max_cycles == args.max_cycles-1):
+                print("   > Episode complete - logging data")
 
                 system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
                 
@@ -357,12 +309,12 @@ if __name__ == "__main__":
                 # Calculate ASO max at the last step of the episode
                 SPEED_LIMIT = 13.89 # TODO: config?
                 aso_max = CalculateASOMax(episode_max_speeds, SPEED_LIMIT)
-                print(" >> EPISODE ASO MAX: {} using speed limit of: {}\n".format(aso_max, SPEED_LIMIT))
+                print("    > EPISODE ASO MAX: {} using speed limit of: {}".format(aso_max, SPEED_LIMIT))
 
                 # Get the total number of cars stopped in the system at the end of the episode
                 info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info
                 system_total_stopped = info['agents_total_stopped']
-                print( " >> TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
+                print( "    > TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
 
                 # Log the episode reward to CSV
                 with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
@@ -378,8 +330,8 @@ if __name__ == "__main__":
                                                             'system_total_stopped': system_total_stopped,
                                                             'nn_step': saved_step}})
                 
-                print(" >> TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
-                print(" >>> NOTE: The reward function being used to evaluate this model may not match the reward function used to train the model")
+                print("    > TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
+                print("    > NOTE: The reward function being used to evaluate this model may not match the reward function used to train the model")
 
                 break
     
