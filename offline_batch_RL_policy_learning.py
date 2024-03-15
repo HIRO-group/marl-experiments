@@ -719,7 +719,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # DEBUGGING:
         offline_g1_returns_threshold_policy = PerformOfflineRollout(G1_pi, dataset_policies[0], rollout_mini_dataset)
         offline_g2_returns_threshold_policy = PerformOfflineRollout(G2_pi, dataset_policies[0], rollout_mini_dataset)
-        offline_g1_returns_queue_policy = PerformOfflineRollout(G2_pi, dataset_policies[1], rollout_mini_dataset)
+        offline_g1_returns_queue_policy = PerformOfflineRollout(G1_pi, dataset_policies[1], rollout_mini_dataset)
         offline_g2_returns_queue_policy = PerformOfflineRollout(G2_pi, dataset_policies[1], rollout_mini_dataset)
         print(f" > OFFLINE ROLLOUT RESULTS:")
         print(f"   > CURRENT POLICY G1_pi: {torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()} ")
