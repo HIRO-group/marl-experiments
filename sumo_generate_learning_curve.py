@@ -258,50 +258,25 @@ if __name__ == "__main__":
 
             # Apply all actions to the env
             next_obses, rewards, dones, truncated, info = env.step(actions)
-            # print(f"   > step: {sumo_step}")
-            # If the parameter sharing model was used, we have to add one hot encoding to the observations
-            if parameter_sharing_model:
-                # Add one hot encoding for either global observations or independent observations
-                if args.global_obs:
-                    global_next_obs = np.hstack(list(next_obses.values()))
-                    for agent in agents:
-                        onehot = np.zeros(num_agents)
-                        onehot[onehot_keys[agent]] = 1.0
-                        next_obses[agent] = np.hstack([onehot, global_next_obs])
-                else:
-                    for agent in agents:
-                        onehot = np.zeros(num_agents)
-                        onehot[onehot_keys[agent]] = 1.0
-                        next_obses[agent] = np.hstack([onehot, next_obses[agent]])
     
             # Accumulate the total episode reward and max speeds
             for agent in agents:
                # At the end of a simulation, next_obses is an empty dictionary so don't log it
-                try:
-                    episode_rewards[agent] += rewards[agent]
-                     # TODO: need to modify this for global observations
-                    episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
-                    # episode_pressures[agent].append(next_obses[agent][-2])  # pressure is the second to last element of the custom observation array
+                episode_rewards[agent] += rewards[agent]
+                # TODO: need to modify this for global observations
+                episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
                 
-                except:
-                    continue
-                
-            obses = next_obses
-
             # If the simulation is done, print the episode reward and close the env
-            if np.prod(list(dones.values())) or (sumo_step % args.max_cycles == args.max_cycles-1):
+            if np.prod(list(dones.values())):
                 print("   > Episode complete - logging data")
 
                 system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
                 
                 # Calculate the maximum of all max speeds observed from each agent during the episode
                 agent_max_speeds = {agent:0 for agent in agents}    # max speed observed by the agent over the entire episode
-                final_max_speeds = {agent:0 for agent in agents}    # last max speed observed by the agent during the episode
-                # final_pressures = {agent:0 for agent in agents}     # last pressure observed by each agent in the episode
+
                 for agent in agents:
                     agent_max_speeds[agent] = max(episode_max_speeds[agent])
-                    final_max_speeds[agent] = episode_max_speeds[agent][-1]
-                    # final_pressures[agent] = episode_pressures[agent][-2]
 
                 system_episode_max_speed = max(list(agent_max_speeds.values()))
                 system_episode_min_max_speed = min(list(agent_max_speeds.values()))
@@ -333,6 +308,25 @@ if __name__ == "__main__":
                 print("    > TOTAL EPISODE REWARD: {}\n".format(system_episode_reward))
                 print("    > NOTE: The reward function being used to evaluate this model may not match the reward function used to train the model")
 
+                # Go to the next policy
                 break
     
+            # The simulation is not complete, so update the observation for the next step
+            # If the parameter sharing model was used, we have to add one hot encoding to the observations
+            if parameter_sharing_model:
+                # Add one hot encoding for either global observations or independent observations
+                if args.global_obs:
+                    global_next_obs = np.hstack(list(next_obses.values()))
+                    for agent in agents:
+                        onehot = np.zeros(num_agents)
+                        onehot[onehot_keys[agent]] = 1.0
+                        next_obses[agent] = np.hstack([onehot, global_next_obs])
+                else:
+                    for agent in agents:
+                        onehot = np.zeros(num_agents)
+                        onehot[onehot_keys[agent]] = 1.0
+                        next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+
+            obses = next_obses
+
     env.close()

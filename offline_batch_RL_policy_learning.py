@@ -40,7 +40,7 @@ from MARLConfigParser import MARLConfigParser
 # Custom modules
 from actor_critic import Actor, QNetwork, one_hot_q_values
 from dataset import Dataset
-
+from calculate_speed_control import CalculateMaxSpeedOverage
 
 # Set up the system and environement
 # Make sure SUMO env variable is set
@@ -49,22 +49,6 @@ if 'SUMO_HOME' in os.environ:
     sys.path.append(tools)
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
-
-
-def CalculateMaxSpeedOverage(max_speed:float, speed_limit:float) -> float:
-    """
-    Calculate how much the agents' max speeds exceeded some speed limit
-    :param max_speed: Max speed of all cars observed by the agent (assumed at a single step)
-    :param speed_limit: User defined threshold over which the overage is calculated
-    :returns -1 times how much the max speed exceeded the speed limit
-    """
-
-    overage = 0.0
-
-    if (max_speed > speed_limit):
-        overage = -1.0*(max_speed - speed_limit)
-
-    return overage
 
 
 def GenerateDataset(env: sumo_rl.parallel_env,
@@ -133,7 +117,6 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
             # Set the action for each agent
             for agent in agents:
-                random_number = random.random()
     
                 # Select which policy to use according to the provided action ratios
                 q_network = np.random.choice(['random'] + list_of_policies, 1, p=[1-optimal_action_ratio, exceess_speed_action_ratio, queue_action_ratio])[0]
@@ -186,6 +169,7 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
     """
     Run a rollout episode in the SUMO environment using a provided policy, calcualte and return a metric averaged per step across
     all agents
+    # TODO: If a dataset was not provided and we have to generate a new dataset, this function should be part of that step
 
     :param queue_length_env: The SUMO environment to execute the policy in, assumes that the reward has been set to "queue"
     :param policies_to_use: Dictionary that maps agents to "actor" models to use for the evaluation
@@ -259,15 +243,10 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
         # Accumulate the total episode reward and max speeds
         for agent in agents:
             # At the end of a simulation, next_obses is an empty dictionary so don't log it 
-            # TODO: we shouldn't need the try/except step here
-            try:
-                episode_rewards[agent] += rewards[agent]        # NOTE This should be the same as episode_constraint_2 if the env was configured correctly
-                max_speed_observed_by_agent = next_obses[agent][-1]
-                episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
-                episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
-
-            except:
-                continue
+            episode_rewards[agent] += rewards[agent]        # NOTE This should be the same as episode_constraint_2 if the env was configured correctly
+            max_speed_observed_by_agent = next_obses[agent][-1]
+            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
+            episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
                 
         obses = next_obses
     
@@ -736,7 +715,19 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         g2_returns = PerformOfflineRollout(G2_pi, policies, rollout_mini_dataset)
         # TODO: perform some kind of similar rollout for the dataset policies to compare?
 
-        #
+
+        # DEBUGGING:
+        offline_g1_returns_threshold_policy = PerformOfflineRollout(G1_pi, dataset_policies[0], rollout_mini_dataset)
+        offline_g2_returns_threshold_policy = PerformOfflineRollout(G2_pi, dataset_policies[0], rollout_mini_dataset)
+        offline_g1_returns_queue_policy = PerformOfflineRollout(G2_pi, dataset_policies[1], rollout_mini_dataset)
+        offline_g2_returns_queue_policy = PerformOfflineRollout(G2_pi, dataset_policies[1], rollout_mini_dataset)
+        print(f" > OFFLINE ROLLOUT RESULTS:")
+        print(f"   > CURRENT POLICY G1_pi: {torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()} ")
+        print(f"   > CURRENT POLICY G2_pi: {torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()} ")
+        print(f"   > THRESHOLD POLICY G1_pi: {torch.sum(torch.tensor(list(offline_g1_returns_threshold_policy.values()))).detach().numpy()} ")
+        print(f"   > THRESHOLD POLICY G2_pi: {torch.sum(torch.tensor(list(offline_g2_returns_threshold_policy.values()))).detach().numpy()} ")
+        print(f"   > QUEUE POLICY G1_pi: {torch.sum(torch.tensor(list(offline_g1_returns_queue_policy.values()))).detach().numpy()} ")
+        print(f"   > QUEUE POLICY G2_pi: {torch.sum(torch.tensor(list(offline_g2_returns_queue_policy.values()))).detach().numpy()} ")
 
         # NOTE: We are logging the lambda values produced by round X rather than the values used in
         # round X
@@ -776,20 +767,25 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
             csv_writer.writerow({**new_row})
 
         # Now run some online rollouts to compare performance between the learned policy and the dataset policies
-        print(f" > Performing online rollout for mean policy")
-        mean_policy_sys_return, mean_policy_g1_return, mean_policy_g2_return = PerformRollout(env, prev_mean_policies, config_args)
+        print(f"  > Performing online rollout for mean policy")
+        _, mean_policy_g1_return, mean_policy_g2_return = PerformRollout(env, prev_mean_policies, config_args)
         
-        print(f" > Performing online rollout for current learned policy")
-        current_policy_sys_return, current_policy_g1_return, current_policy_g2_return = PerformRollout(env, policies, config_args)
+        print(f"  > Performing online rollout for current learned policy")
+        _, current_policy_g1_return, current_policy_g2_return = PerformRollout(env, policies, config_args)
 
         # TODO: make this more generic
         threshold_policy = dataset_policies[0]
-        print(f" >> Performing online rollout for speed overage policy")
-        threshold_policy_sys_return, threshold_policy_g1_return, threshold_policy_g2_return = PerformRollout(env, threshold_policy, config_args)
+        print(f"  > Performing online rollout for speed overage policy")
+        _, threshold_policy_g1_return, threshold_policy_g2_return = PerformRollout(env, threshold_policy, config_args)
 
         queue_policy = dataset_policies[1]
-        print(f" >> Performing online rollout for queue policy")
-        queue_policy_sys_return, queue_policy_g1_return, queue_policy_g2_return = PerformRollout(env, queue_policy, config_args)
+        print(f"  > Performing online rollout for queue policy")
+        _, queue_policy_g1_return, queue_policy_g2_return = PerformRollout(env, queue_policy, config_args)
+
+        print(f"    > Speed overage policy system g1 return: {sum(threshold_policy_g1_return.values())}")
+        print(f"    > Speed overage policy system g2 return: {sum(threshold_policy_g2_return.values())}")
+        print(f"    > Queue policy system g1 return: {sum(queue_policy_g1_return.values())}")
+        print(f"    > Queue policy system g2 return: {sum(queue_policy_g2_return.values())}")
 
         # Log the online rollout results
         with open(f"{csv_save_dir}/online_rollouts.csv", "a", newline="") as csvfile:
@@ -1703,6 +1699,11 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[di
         next_obses, rewards, dones, truncated, info = env.step(actions)
 
         if np.prod(list(dones.values())):
+            # DEBUGGING:
+            print(f"    > Last max speeds observed by each agent: ")
+            for agent in agents:
+                print(f"     > agent: {agent}  max speed: {obses[agent][-1]}")
+            
             break
 
         if config_args.parameter_sharing_model:
@@ -1717,18 +1718,14 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[di
         # Accumulate the total episode reward and max speeds
         for agent in agents:
             # At the end of a simulation, next_obses is an empty dictionary so don't log it 
-            # TODO: we shouldn't need the try/except step here
-            try:
-                episode_rewards[agent] += rewards[agent]
-                max_speed_observed_by_agent = next_obses[agent][-1]
-                episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
-                episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
+            episode_rewards[agent] += rewards[agent]
+            max_speed_observed_by_agent = next_obses[agent][-1]
+            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
+            episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
 
-            except:
-                continue
                 
         obses = next_obses
-        
+
     return episode_rewards, episode_constraint_1, episode_constraint_2
 
 
@@ -1759,7 +1756,7 @@ def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)
 
         # Add up the max values of all states from the mini dataset
         cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
-        print(f"   > cumulative_return for agent '{agent}': {cumulative_return[agent]}")
+        # print(f"   > cumulative_return for agent '{agent}': {cumulative_return[agent]}")
 
     return cumulative_return
 
@@ -1784,7 +1781,7 @@ def OnlineLambdaLearning(lambda_1_prev:float,
     # Lambda learning rate # TODO: config
     # n = 0.01
     # n = 0.00001
-    n = 0.001
+    n = 0.1
 
     exp_g1_returns = np.exp(n * avg_cumulative_g1_returns)
     exp_g2_returns = np.exp(n * avg_cumulative_g2_returns)
@@ -1818,9 +1815,10 @@ def OnlineLambdaLearningByImprovementRate(lambda_1_prev:float,
     avg_cumulative_g2_returns = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy() / num_agents
 
     # Lambda learning rate # TODO: config
+    n = 0.1
     # n = 0.01
     # n = 0.00001
-    n = 1
+    # n = 1
 
     g1_improvment_rate = (avg_cumulative_g1_returns-avg_cumulative_g1_returns_prev)/avg_cumulative_g1_returns_prev
     g2_improvment_rate = (avg_cumulative_g2_returns-avg_cumulative_g2_returns_prev)/avg_cumulative_g2_returns_prev
@@ -1897,7 +1895,6 @@ if __name__ == "__main__":
     observation_spaces = env.observation_spaces
 
     # Initialize dicitonaries
-    onehot_keys = {agent: i for i, agent in enumerate(agents)}
     episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
 
     print("\n=================== Environment Information ===================")
@@ -1915,7 +1912,7 @@ if __name__ == "__main__":
     speed_overage_model_policies = {}    
 
     if parameter_sharing_model:
-        # TODO: in this case, each agent should still have it's own network
+        # In this case, each agent will still have it's own network, they will just be copies of each other
 
         # Define the shape of the observation space depending on if we're using a global observation or not
         # Regardless, we need to add an array of length num_agents to the observation to account for one hot encoding
@@ -1931,6 +1928,7 @@ if __name__ == "__main__":
         # Load the Q-network file
         nn_queue_file = "{}/{}.pt".format(nn_queue_dir, analysis_steps)
         queue_model_policy.load_state_dict(torch.load(nn_queue_file))
+        print(" > Loading NN from file: {} for 'queue' policy".format(nn_queue_file))
 
         # Speed overage model policies
         speed_overage_model_policy = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
@@ -1938,6 +1936,7 @@ if __name__ == "__main__":
         # Load the Q-network file
         nn_speed_overage_file = "{}/{}.pt".format(nn_speed_overage_dir, analysis_steps)
         speed_overage_model_policy.load_state_dict(torch.load(nn_speed_overage_file))
+        print(" > Loading NN from file: {} for 'speed threshold' policy".format(nn_speed_overage_file))
 
         for agent in agents: 
             speed_overage_model_policies[agent] = speed_overage_model_policy
@@ -1956,12 +1955,12 @@ if __name__ == "__main__":
             # Queue model policies
             nn_queue_file = "{}/{}-{}.pt".format(nn_queue_dir, analysis_steps, agent)
             queue_model_policies[agent].load_state_dict(torch.load(nn_queue_file))
-            print(" > Loading NN from file: {} for dataset generation".format(nn_queue_file))
+            print(" > Loading NN from file: {} for 'queue' policy".format(nn_queue_file))
 
             # Repeat for speed overage model policies
             nn_speed_overage_file = "{}/{}-{}.pt".format(nn_speed_overage_dir, analysis_steps, agent)
             speed_overage_model_policies[agent].load_state_dict(torch.load(nn_speed_overage_file))
-            print(" > Loading NN from file: {} for dataset generation".format(nn_speed_overage_file))
+            print(" > Loading NN from file: {} for 'speed threshold' policy".format(nn_speed_overage_file))
 
     # List of policies is [speed_overage, queue] - the order is imporant
     list_of_policies.append(speed_overage_model_policies)

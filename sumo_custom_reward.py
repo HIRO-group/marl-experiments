@@ -9,6 +9,8 @@ Description:
 from sumo_rl import TrafficSignal
 import numpy as np
 
+from calculate_speed_control import CalculateMaxSpeedOverage
+
 def MaxSpeedRewardFunction(ts:TrafficSignal):
         """
         Return the "pension" (i.e. difference) between the max observered speed of all vehicles at the intersection and a threshold 
@@ -26,6 +28,8 @@ def MaxSpeedRewardFunction(ts:TrafficSignal):
     
         # SPEED_THRESHOLD = 20.0
 
+        LOWER_SPEED_THRESHOLD = 1.0
+
         max_speed = 0.0
 
         # Get all vehicles at the intersection
@@ -40,18 +44,23 @@ def MaxSpeedRewardFunction(ts:TrafficSignal):
             if speed > max_speed:
                 max_speed = speed
         
+        overage = CalculateMaxSpeedOverage(max_speed=max_speed,
+                                           speed_limit=SPEED_THRESHOLD,
+                                           lower_speed_limit=LOWER_SPEED_THRESHOLD)
+
+        return overage
+
+        # if max_speed > SPEED_THRESHOLD:
+        #     pension = max_speed - SPEED_THRESHOLD
+        #     # If the max speed is greater than then threshold, return the negative 
+        #     # of the pension (i.e. difference)
+        #     return (-1.0 * np.sqrt(pension))
         
-        if max_speed > SPEED_THRESHOLD:
-            pension = max_speed - SPEED_THRESHOLD
-            # If the max speed is greater than then threshold, return the negative 
-            # of the pension (i.e. difference)
-            return (-1.0 * np.sqrt(pension))
+        # # TODO: make lower bound configurable?
+        # elif max_speed <= 5.0: 
+        #     pension = SPEED_THRESHOLD - max_speed
+        #     return (-1.0 * np.sqrt(pension))
         
-        # TODO: make lower bound configurable?
-        elif max_speed <= 5.0: 
-            pension = SPEED_THRESHOLD - max_speed
-            return (-1.0 * np.sqrt(pension))
-        
-        else:
-            # If the max speed is within the bounds, just return 0
-            return 0.0
+        # else:
+        #     # If the max speed is within the bounds, just return 0
+        #     return 0.0
