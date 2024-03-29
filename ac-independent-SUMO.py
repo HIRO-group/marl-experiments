@@ -322,10 +322,10 @@ for global_step in range(args.total_timesteps):
                 onehot[onehot_keys[agent]] = 1.0
                 next_obses[agent] = np.hstack([onehot, global_next_obs])
         else:
-                for agent in agents:
-                    onehot = np.zeros(num_agents)
-                    onehot[onehot_keys[agent]] = 1.0
-                    next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+            for agent in agents:
+                onehot = np.zeros(num_agents)
+                onehot[onehot_keys[agent]] = 1.0
+                next_obses[agent] = np.hstack([onehot, next_obses[agent]])
 
     else:
         # Global states
@@ -360,7 +360,6 @@ for global_step in range(args.total_timesteps):
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
 
             with torch.no_grad():
-                target_maxes = []
                 target = torch.max(target_network.forward(s_next_obses), dim=1)[0]
                 td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
             q_values = q_network.forward(s_obses)
@@ -369,7 +368,7 @@ for global_step in range(args.total_timesteps):
             
             loss = loss_fn(td_target, old_val)
             losses[agent] = loss.item()
-            
+
             # optimize the model
             optimizer.zero_grad()
             loss.backward()

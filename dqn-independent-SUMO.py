@@ -18,6 +18,9 @@ References:
     - https://github.com/LucasAlegre/sumo-rl 
     - https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf 
 
+
+TODO: CAN THIS FILE BE DELETED now that dqn-independent-ps.py has been updated to support SUMO?
+    
 """
 
 import torch

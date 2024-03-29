@@ -30,6 +30,7 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 # Config Parser
 from MARLConfigParser import MARLConfigParser
 from actor_critic import Actor
+from calculate_speed_control import CalculateMaxSpeedOverage
 
 
 # Make sure SUMO env variable is set
@@ -101,6 +102,13 @@ if __name__ == "__main__":
     parser = MARLConfigParser()
     args = parser.parse_args()
     
+
+    SPEED_OVERAGE_THRESHOLD  = 13.89
+    # SPEED_LOWER_THRESHOLD = 0.0
+    # SPEED_LOWER_THRESHOLD = 0.01
+    SPEED_LOWER_THRESHOLD = 1.0
+    # SPEED_LOWER_THRESHOLD = 5.0
+
     if not args.seed:
         args.seed = int(datetime.now()) 
     
@@ -153,7 +161,8 @@ if __name__ == "__main__":
     onehot_keys = {agent: i for i, agent in enumerate(agents)}
     
     episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
-
+    episode_constraint_1 = {agent: 0 for agent in agents}
+    episode_constraint_2 = {agent: 0 for agent in agents}
     print("\n=================== Environment Information ===================")
     print(" > agents: {}".format(agents))
     print(" > num_agents: {}".format(num_agents))
@@ -248,15 +257,18 @@ if __name__ == "__main__":
         # Apply all actions to the env
         next_obses, rewards, dones, truncated, info = env.step(actions)
 
-        # Accumulate the total episode reward
-        for agent in agents:
-            episode_rewards[agent] += rewards[agent]
 
         # If the simulation is done, print the episode reward and close the env
         if np.prod(list(dones.values())):
             system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
+            system_accumulated_g1 = sum(list(episode_constraint_1.values()))
+            system_accumulated_g2 = sum(list(episode_constraint_2.values()))
 
-            print(" >> TOTAL EPISODE REWARD: {}".format(system_episode_reward))
+            print(f" > Rollout complete after {sumo_step} steps")
+            print(f"   >> TOTAL EPISODE REWARD: {system_episode_reward} using reward: {args.sumo_reward}")
+            print(f"   >> TOTAL EPISODE g1: {system_accumulated_g1} using upper speed limit: {SPEED_OVERAGE_THRESHOLD} and lower speed limit: {SPEED_LOWER_THRESHOLD}")
+            print(f"   >> TOTAL EPISODE g2: {system_accumulated_g2}")
+
 
             break
 
@@ -274,6 +286,17 @@ if __name__ == "__main__":
                     onehot = np.zeros(num_agents)
                     onehot[onehot_keys[agent]] = 1.0
                     next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+
+        # Accumulate the total episode reward
+        for agent in agents:
+            episode_rewards[agent] += rewards[agent]
+            max_speed_observed_by_agent = next_obses[agent][-1] # max speed is the last element of the custom observation array
+            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
+                                                                    speed_limit=SPEED_OVERAGE_THRESHOLD,
+                                                                    lower_speed_limit=SPEED_LOWER_THRESHOLD)
+            info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info                
+            agent_cars_stopped = info[f'{agent}_stopped']   # Get the per-agent number of stopped cars from the info dictionary
+            episode_constraint_2[agent] += agent_cars_stopped
 
         obses = next_obses
 

@@ -345,15 +345,7 @@ for global_step in range(args.total_timesteps):
         loss = loss_fn(td_target, old_val)
         losses[agent] = loss.item()
 
-        # TODO: plotting loss currently disabled for this implementation - see below
-        # if global_step % 100 == 0:	
-        #     writer.add_scalar("losses/td_loss/" + agent, loss, global_step)
-
-        #     with open(f"{csv_dir}/td_loss.csv", "a", newline="") as csvfile:
-        #         csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['global_step'])
-        #         csv_writer.writerow({agent: loss.item(), 'global_step': global_step})
-
-        # optimize the midel
+        # optimize the model
         optimizer.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(list(q_network.parameters()), args.max_grad_norm)

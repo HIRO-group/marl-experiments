@@ -37,6 +37,7 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 # Config Parser
 from MARLConfigParser import MARLConfigParser
 from actor_critic import Actor, QNetwork
+from calculate_speed_control import CalculateMaxSpeedOverage
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -48,6 +49,7 @@ else:
 
 def CalculateASOMax(episode_max_speeds, speed_limit):
     """
+    TODO: function currently not used for training but update to ensure it matches reward definition
     Function for calculating The average maximum speed overage (ASOmax) after an episode,
     ASO max is essentially the average amount that each agent execeeded a given speed limit over the course of an entire episode.
     This metric is used in part to evaulate the performance of models that were trained using the "custom speed threshold" reward defined 
@@ -88,7 +90,12 @@ if __name__ == "__main__":
     # (each actor-critic model includes model snapshots of both the actor and critic networks)                    
     parser = MARLConfigParser()
     args = parser.parse_args()
-    
+
+    # TODO: config
+    SPEED_OVERAGE_THRESHOLD  = 13.89
+    # SPEED_LOWER_THRESHOLD = 0.0
+    SPEED_LOWER_THRESHOLD = 1.0
+
     # Create CSV file to store the data
     nn_directory = args.nn_directory     # TODO: just use nn_dir instead???   
     nn_dir = f"{nn_directory}"           # Name of directory where the nn was stored during training    
@@ -163,7 +170,13 @@ if __name__ == "__main__":
 
     # Initialize the csv header for the max speeds file 
     with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
-        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'system_total_stopped', 'nn_step'])    
+        csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 
+                                                                'system_episode_min_max_speed', 
+                                                                'system_aso_max', 
+                                                                'system_accumulated_speed_overage (g1)',
+                                                                'system_accumulated_queue (g2)', 
+                                                                'system_total_stopped', 
+                                                                'nn_step'])    
         csv_writer.writeheader()
 
     # Loop over all the nn files in the nn directory
@@ -175,6 +188,8 @@ if __name__ == "__main__":
         episode_rewards = {agent: 0 for agent in agents}            # Dictionary that maps the each agent to its cumulative reward each episode
         episode_max_speeds = {agent: [] for agent in agents}        # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
         # episode_pressures = {agent: [] for agent in agents}       # Dictionary that maps each agent to the pressure at each step of the agent's episode (pressure = #veh leaving - #veh approaching of the intersection)
+        episode_constraint_1 = {agent: 0 for agent in agents}
+        episode_constraint_2 = {agent: 0 for agent in agents}
 
         # Construct the Q-Network model 
         # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent DQN model was used
@@ -259,13 +274,6 @@ if __name__ == "__main__":
             # Apply all actions to the env
             next_obses, rewards, dones, truncated, info = env.step(actions)
     
-            # Accumulate the total episode reward and max speeds
-            for agent in agents:
-               # At the end of a simulation, next_obses is an empty dictionary so don't log it
-                episode_rewards[agent] += rewards[agent]
-                # TODO: need to modify this for global observations
-                episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
-                
             # If the simulation is done, print the episode reward and close the env
             if np.prod(list(dones.values())):
                 print("   > Episode complete - logging data")
@@ -282,14 +290,16 @@ if __name__ == "__main__":
                 system_episode_min_max_speed = min(list(agent_max_speeds.values()))
 
                 # Calculate ASO max at the last step of the episode
-                SPEED_LIMIT = 13.89 # TODO: config?
-                aso_max = CalculateASOMax(episode_max_speeds, SPEED_LIMIT)
-                print("    > EPISODE ASO MAX: {} using speed limit of: {}".format(aso_max, SPEED_LIMIT))
+                aso_max = CalculateASOMax(episode_max_speeds, SPEED_OVERAGE_THRESHOLD)
+                print("    > EPISODE ASO MAX: {} using speed limit of: {}".format(aso_max, SPEED_OVERAGE_THRESHOLD))
 
                 # Get the total number of cars stopped in the system at the end of the episode
                 info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info
                 system_total_stopped = info['agents_total_stopped']
-                print( "    > TOTAL NUMBER OF STOPPED CARS IN SYSTEM: {}".format(system_total_stopped))
+                print( "    > TOTAL NUMBER OF STOPPED CARS IN SYSTEM AT LAST STEP: {}".format(system_total_stopped))
+
+                system_accumulated_g1 = sum(episode_constraint_1.values())
+                system_accumulated_g2 = sum(episode_constraint_2.values())
 
                 # Log the episode reward to CSV
                 with open(f"{csv_dir}/learning_curve.csv", "a", newline="") as csvfile:
@@ -298,10 +308,18 @@ if __name__ == "__main__":
                 
                 # Log the max speeds
                 with open(f"{csv_dir}/episode_max_speeds.csv", "a", newline="") as csvfile:
-                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_aso_max', 'system_total_stopped', 'nn_step'])
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 
+                                                                            'system_episode_min_max_speed', 
+                                                                            'system_aso_max', 
+                                                                            'system_accumulated_speed_overage (g1)', 
+                                                                            'system_accumulated_queue (g2)',
+                                                                            'system_total_stopped', 
+                                                                            'nn_step'])
                     csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
                                                             'system_episode_min_max_speed': system_episode_min_max_speed,
                                                             'system_aso_max': aso_max,
+                                                            'system_accumulated_speed_overage (g1)' : system_accumulated_g1, 
+                                                            'system_accumulated_queue (g2)' : system_accumulated_g2, 
                                                             'system_total_stopped': system_total_stopped,
                                                             'nn_step': saved_step}})
                 
@@ -311,6 +329,9 @@ if __name__ == "__main__":
                 # Go to the next policy
                 break
     
+                # Accumulate the total episode reward and max speeds
+            
+
             # The simulation is not complete, so update the observation for the next step
             # If the parameter sharing model was used, we have to add one hot encoding to the observations
             if parameter_sharing_model:
@@ -326,6 +347,17 @@ if __name__ == "__main__":
                         onehot = np.zeros(num_agents)
                         onehot[onehot_keys[agent]] = 1.0
                         next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+
+            for agent in agents:
+                episode_rewards[agent] += rewards[agent]
+                max_speed_observed_by_agent = next_obses[agent][-1] # max speed is the last element of the custom observation array
+                episode_max_speeds[agent].append(max_speed_observed_by_agent)
+                episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
+                                                                        speed_limit=SPEED_OVERAGE_THRESHOLD,
+                                                                        lower_speed_limit=SPEED_LOWER_THRESHOLD)
+                info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info                
+                agent_cars_stopped = info[f'{agent}_stopped']   # Get the per-agent number of stopped cars from the info dictionary
+                episode_constraint_2[agent] += agent_cars_stopped
 
             obses = next_obses
 

@@ -29,6 +29,9 @@ def MaxSpeedRewardFunction(ts:TrafficSignal):
         # SPEED_THRESHOLD = 20.0
 
         LOWER_SPEED_THRESHOLD = 1.0
+        # LOWER_SPEED_THRESHOLD = 0.01
+        # LOWER_SPEED_THRESHOLD = 5.0
+        # LOWER_SPEED_THRESHOLD = 0.0
 
         max_speed = 0.0
 

@@ -81,6 +81,11 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
     DATASET_SIZE = num_episodes*episode_steps
     SPEED_OVERAGE_THRESHOLD = 13.89 # TODO: config
+    # SPEED_LOWER_THRESHOLD = 0.01
+    # SPEED_LOWER_THRESHOLD = 5.0
+    # SPEED_LOWER_THRESHOLD = 0.0
+    SPEED_LOWER_THRESHOLD = 1.0
+    
     agents = env.possible_agents
     num_agents = len(agents)
     optimal_action_ratio = exceess_speed_action_ratio + queue_action_ratio  # Ratio of optimal actions that should be in this dataset
@@ -147,7 +152,9 @@ def GenerateDataset(env: sumo_rl.parallel_env,
             # Caclulate constraints and add the experience to the dataset
             for agent in agents:
                  max_speed_observed_by_agent = next_obses[agent][-1]
-                 constraint_1[agent] = CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
+                 constraint_1[agent] = CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
+                                                                speed_limit=SPEED_OVERAGE_THRESHOLD,
+                                                                lower_speed_limit=SPEED_LOWER_THRESHOLD)
                  constraint_2[agent] = rewards[agent]   # NOTE: This assumes that the environment was configured with the "queue" reward
                  dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
 
@@ -190,6 +197,10 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
     # Define the speed overage threshold used to evaluate the g1 constraint 
     # (note this needs to match what is used in GenerateDataset)
     SPEED_OVERAGE_THRESHOLD = 13.89
+    # SPEED_LOWER_THRESHOLD = 0.01
+    # SPEED_LOWER_THRESHOLD = 5.0
+    # SPEED_LOWER_THRESHOLD = 0.0
+    SPEED_LOWER_THRESHOLD = 1.0 
 
     agents = queue_length_env.possible_agents
 
@@ -245,14 +256,23 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
             # At the end of a simulation, next_obses is an empty dictionary so don't log it 
             episode_rewards[agent] += rewards[agent]        # NOTE This should be the same as episode_constraint_2 if the env was configured correctly
             max_speed_observed_by_agent = next_obses[agent][-1]
-            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
+            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
+                                                                    speed_limit=SPEED_OVERAGE_THRESHOLD,
+                                                                    lower_speed_limit=SPEED_LOWER_THRESHOLD)
             episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
                 
         obses = next_obses
-    
+    print(f"   > Rollout complete after {sumo_step} steps")
+    print(f"    > Constraint 1 total return: {sum(episode_constraint_1.values())}")
+    print(f"    > Constraint 2 total return: {sum(episode_constraint_2.values())}")
+    for agent in agents: 
+        print(f"      > Agent '{agent}' constraint 1 return: {episode_constraint_1[agent]}")
+        print(f"      > Agent '{agent}' constraint 2 return: {episode_constraint_2[agent]}")
+
     if (reward_to_evaluate == 'speed_overage'):
         # Average value per step for each agent
         avg_g1s_per_step = [agent_g1_total_returns/sumo_step for agent_g1_total_returns in episode_constraint_1.values()]
+        print(f"      > Average g1s per step for each agent: \n{avg_g1s_per_step}")
         # Average value per step averaged across all agents
         avg_g1_per_step_per_agent = np.mean(avg_g1s_per_step)
 
@@ -261,6 +281,7 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
     elif (reward_to_evaluate == 'queue'):
         # Average value per step for each agent
         avg_g2s_per_step = [agent_g2_total_returns/sumo_step for agent_g2_total_returns in episode_constraint_2.values()]
+        print(f"      > Average g2s per step for each agent: \n{avg_g2s_per_step}")
         # Average value per step averaged across all agents
         avg_g2_per_step_per_agent = np.mean(avg_g2s_per_step)
 
@@ -372,8 +393,8 @@ def NormalizeDataset(dataset:dict,
     total_g2 = 0.0
 
     # Calculate constraint to be applied to g1 returns
-    c1 = (g1_upper_bound - g1_lower_bound) * constraint_ratio + g1_lower_bound
-    print(f" > c1 = {c1}")  
+    c1 = ((g1_upper_bound - g1_lower_bound) * constraint_ratio) + g1_lower_bound
+    print(f" > Constraint for g1 (c1) = {c1}")  
 
     for agent in dataset.keys():
 
@@ -430,7 +451,6 @@ def NormalizeDataset(dataset:dict,
         print(f"    > G_1 = {G_1}")
         print(f"    > G_2 = {G_2}")
 
-    # These can be thought of as the constraints to show on the plots from online rollouts
     print(f" > total_g1 = {total_g1}")  
     print(f" > total_g2 = {total_g2}")            
 
@@ -1654,6 +1674,10 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[di
     # Define the speed overage threshold used to evaluate the g1 constraint
     # (note this needs to match what is used in GenerateDataset)
     SPEED_OVERAGE_THRESHOLD = 13.89
+    # SPEED_LOWER_THRESHOLD = 0.01
+    # SPEED_LOWER_THRESHOLD = 5.0
+    # SPEED_LOWER_THRESHOLD = 0.0
+    SPEED_LOWER_THRESHOLD = 1.0
 
     agents = env.possible_agents
 
@@ -1720,7 +1744,9 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[di
             # At the end of a simulation, next_obses is an empty dictionary so don't log it 
             episode_rewards[agent] += rewards[agent]
             max_speed_observed_by_agent = next_obses[agent][-1]
-            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
+            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
+                                                                    speed_limit=SPEED_OVERAGE_THRESHOLD,
+                                                                    lower_speed_limit=SPEED_LOWER_THRESHOLD)
             episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
 
                 
@@ -2027,6 +2053,7 @@ if __name__ == "__main__":
     # Calculate the upper (i.e. less negative) bound of the g1 constraint 
     # This is the average reward per step (for all agents) of the excessive speed policy when evaluating it according 
     # to the excessive speed (i.e. speed_overage) reward
+    print(f" > Calculating g1 constraint upper bound using 'speed overage' policies")
     g1_upper_bound = CalculateAverageRewardPerStep(queue_length_env=env,
                                                    policies_to_use=speed_overage_model_policies,
                                                    reward_to_evaluate='speed_overage',
@@ -2035,6 +2062,7 @@ if __name__ == "__main__":
     # Calculate the lower (i.e. more negative) bound of the g1 constraint  
     # This is the average reward per step (for all agents) of the queue length policy when evaluating it according 
     # to the excessive speed (i.e. speed_overage) reward  
+    print(f" > Calculating g1 constraint lower bound using 'queue' policies")
     g1_lower_bound = CalculateAverageRewardPerStep(queue_length_env=env,
                                                    policies_to_use=queue_model_policies,
                                                    reward_to_evaluate='speed_overage',
