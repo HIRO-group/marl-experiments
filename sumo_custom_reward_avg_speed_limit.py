@@ -8,14 +8,14 @@ Description:
 
 from sumo_rl import TrafficSignal
 
-from calculate_speed_control import CalculateMaxSpeedOverage
+from calculate_speed_control import CalculateSpeedError
 
 def AverageSpeedLimitReward(ts:TrafficSignal):
         """
 
         """
         
-        # SPEED_LIMIT = 10.0
+        # TODO: Config
         SPEED_LIMIT = 7.0
 
         # Get all vehicles at the intersection
@@ -34,8 +34,8 @@ def AverageSpeedLimitReward(ts:TrafficSignal):
         avg_speed = avg_speed/len(vehs)
 
 
-        overage = CalculateMaxSpeedOverage(max_speed=avg_speed,
-                                           speed_limit=SPEED_LIMIT,
-                                           lower_speed_limit=SPEED_LIMIT)
+        overage = CalculateSpeedError(speed=avg_speed,
+                                    speed_limit=SPEED_LIMIT,
+                                    lower_speed_limit=SPEED_LIMIT)
 
         return overage

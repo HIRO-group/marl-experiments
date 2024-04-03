@@ -41,7 +41,7 @@ import sys
 from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
 from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
-from calculate_speed_control import CalculateMaxSpeedOverage
+from calculate_speed_control import CalculateSpeedError
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
@@ -162,10 +162,8 @@ print(" > num_agents:\n {}".format(num_agents))
 
 # TODO: these dictionaries are deprecated, use action_space & observation_space functions instead
 action_spaces = env.action_spaces
-print(" > action_spaces:\n {}".format(action_spaces))
-
 observation_spaces = env.observation_spaces
-print(" > observation_spaces:\n {}".format(observation_spaces))
+
 
 # CSV files to save episode metrics during training
 with open(f"{csv_dir}/critic_loss.csv", "w", newline="") as csvfile:
@@ -186,8 +184,12 @@ with open(f"{csv_dir}/episode_reward.csv", "w", newline="") as csvfile:
 # system_episode_min_max_speed: The lowest of all maximum speeds observed by all agents during an episode
 #   i.e. if four agents observed max speeds of [6.6, 7.0, 10.0, 12.0] during the episode, 
 #   system_episode_min_max_speed would return 6.6 and system_episode_max_speed would return 12.0
+# system_accumulated_stopped: Accumulated number of stopped cars observed by all agents during the episode
 with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
-    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_accumulated_stopped', 'global_step'])    
+    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 
+                                                            'system_episode_min_max_speed', 
+                                                            'system_accumulated_stopped', 
+                                                            'global_step'])    
     csv_writer.writeheader()
 
 random.seed(args.seed)
@@ -218,12 +220,12 @@ print(" > Initializing neural networks")
 
 if args.parameter_sharing_model:
     # Parameter sharing is being used
-    print(f" >> Parameter sharing enabled")
+    print(f"  > Parameter sharing enabled")
     eg_agent = agents[0]
     onehot_keys = {agent: i for i, agent in enumerate(agents)}
 
     if args.global_obs:
-        print(f" >>> Global observations enabled")
+        print(f"   > Global observations enabled")
         # Define the observation space dimensions (depending on whether or not global observations are being used)
         observation_space_shape = tuple((shape+1) * (num_agents) for shape in observation_spaces[eg_agent].shape)
 
@@ -234,7 +236,7 @@ if args.parameter_sharing_model:
             obses[agent] = np.hstack([onehot, global_obs])        
 
     else:
-        print(f" >>> Global observations NOT enabled")
+        print(f"   > Global observations NOT enabled")
         observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
         observation_space_shape = tuple(np.array([observation_space_shape]))   
         for agent in agents:
@@ -249,13 +251,13 @@ if args.parameter_sharing_model:
     optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)                       # Optimizer for the critic
     actor_optimizer = optim.Adam(list(actor_network.parameters()), lr=args.learning_rate)       # Optimizer for the actor
     
-    print(f" >> Observation space shape: {observation_space_shape}".format(observation_space_shape))
-    print(f" >> Actionspace shape: {action_spaces[agent].n}")    
-    print(f" >> Q-network structure: { q_network}") 
+    print(f"  > Observation space shape: {observation_space_shape}".format(observation_space_shape))
+    print(f"  > Actionspace shape: {action_spaces[agent].n}")    
+    print(f"  > Q-network structure: { q_network}") 
 
 
 else:
-    print(f" >> Parameter sharing NOT enabled")
+    print(f"  > Parameter sharing NOT enabled")
     q_network = {}          # Dictionary for storing q-networks (maps agent to a q-network), these are the "critics"
     target_network = {}     # Dictionary for storing target networks (maps agent to a network)
     actor_network = {}      # Dictionary for storing actor networks (maps agents to a network)
@@ -273,19 +275,19 @@ else:
         optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate) # All agents use the same optimizer for training
         actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=args.learning_rate)
 
-        print(f" >>> Agent: {agent}".format(agent))    
-        print(f" >>> Observation space shape: {observation_space_shape}".format(observation_space_shape))
-        print(f" >>> Action space shape: {action_spaces[agent].n}")
-    print(f" >> Q-network structure: { q_network[agent]}") # network of last agent
+        print(f"   > Agent: {agent}".format(agent))    
+        print(f"   > Observation space shape: {observation_space_shape}".format(observation_space_shape))
+        print(f"   > Action space shape: {action_spaces[agent].n}")
+    print(f"  > Q-network structure: { q_network[agent]}") # network of last agent
 
     # Global states
     if args.global_obs:
-        print(f" >>> Global observations enabled")
+        print(f"   > Global observations enabled")
         global_obs = np.hstack(list(obses.values()))
         obses = {agent: global_obs for agent in agents}
 
     else: 
-        print(f" >>> Global observations NOT enabled")
+        print(f"   > Global observations NOT enabled")
 
 
 
@@ -301,7 +303,7 @@ if args.render:
 episode_rewards = {agent: 0 for agent in agents}                # Dictionary that maps the each agent to its cumulative reward each episode
 episode_max_speeds = {agent: [] for agent in agents}            # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
 episode_avg_speed_rewards = {agent: 0 for agent in agents}      # Dictionary that maps each agent to the avg speed reward obbtained by each agent
-episode_accumulated_stopped = {agent: 0 for agent in agents}
+episode_accumulated_stopped = {agent: 0 for agent in agents}    # Dictionary that maps each agent to the accumulated number of stopped cars it observes during episode
 actions = {agent: None for agent in agents}                     # Dictionary that maps each agent to the action it selected
 losses = {agent: None for agent in agents}                      # Dictionary that maps each agent to the loss values for its critic network
 actor_losses = {agent: None for agent in agents}                # Dictionary that maps each agent to the loss values for its actor network
@@ -369,16 +371,16 @@ for global_step in range(args.total_timesteps):
         
         episode_rewards[agent] += rewards[agent]
         # TODO: need to modify this for global observations
-        episode_max_speeds[agent].append(next_obses[agent][-1])         # max speed is the last element of the custom observation array
-        agent_avg_speed = next_obses[agent][-2]       # Avg speed reward has been added to observation (as the second to last element)   # TODO: want to use obses not next_obses here?
-        # SPEED_LIMIT = 10.0
+        episode_max_speeds[agent].append(next_obses[agent][-1])     # max speed is the last element of the custom observation array
+        agent_avg_speed = next_obses[agent][-2]                     # Avg speed reward has been added to observation (as the second to last element)   
+        # TODO: config
         SPEED_LIMIT = 7.0
-        avg_speed_reward = CalculateMaxSpeedOverage(max_speed=agent_avg_speed, 
-                                                    speed_limit=SPEED_LIMIT,
-                                                    lower_speed_limit=SPEED_LIMIT)
+        avg_speed_reward = CalculateSpeedError(max_speed=agent_avg_speed, 
+                                            speed_limit=SPEED_LIMIT,
+                                            lower_speed_limit=SPEED_LIMIT)
         episode_avg_speed_rewards[agent] += avg_speed_reward
-        info = env.unwrapped.env._compute_info()                # The wrapper class needs to be unwrapped for some reason in order to properly access info 
-        episode_accumulated_stopped[agent] += info[f'{agent}_stopped']     # Total number of cars stopped at this agent
+        info = env.unwrapped.env._compute_info()                            # The wrapper class needs to be unwrapped for some reason in order to properly access info 
+        episode_accumulated_stopped[agent] += info[f'{agent}_stopped']      # Total number of cars stopped at this agent
 
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
 
@@ -431,23 +433,6 @@ for global_step in range(args.total_timesteps):
                 for agent in agents:
                     torch.save(q_network.state_dict(), f"{nn_dir}/critic_networks/{global_step}.pt")
                     torch.save(actor_network.state_dict(), f"{nn_dir}/actor_networks/{global_step}.pt")
-
-            # if (global_step > args.learning_starts) and (global_step % args.train_frequency == 0):
-            #     # Save loss values occasionally
-            #     if (global_step % 100 == 0):
-            #         system_loss = sum(list(losses.values()))
-            #         system_actor_loss = sum(list(actor_losses.values()))
-
-            #         writer.add_scalar("losses/system_td_loss/", system_loss, global_step)
-            #         writer.add_scalar("losses/system_actor_loss/", system_actor_loss, global_step)
-
-            #         # Log data to CSV
-            #         with open(f"{csv_dir}/critic_loss.csv", "a", newline="") as csvfile:
-            #             csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
-            #             csv_writer.writerow({**losses, **{'system_loss': system_loss, 'global_step': global_step}})
-            #         with open(f"{csv_dir}/actor_loss.csv", "a", newline="") as csvfile:    
-            #             csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_actor_loss', 'global_step'])                        
-            #             csv_writer.writerow({**actor_losses, **{'system_actor_loss': system_actor_loss, 'global_step': global_step}})
 
         else:
             # Update the networks for each agent
@@ -534,8 +519,7 @@ for global_step in range(args.total_timesteps):
     if np.prod(list(dones.values())) or (global_step % args.max_cycles == args.max_cycles-1): 
         system_episode_reward = sum(list(episode_rewards.values()))                         # Accumulated reward of all agents
         system_episode_avg_speed_reward = sum(list(episode_avg_speed_rewards.values()))     # Accumulated avg speed reward of all agents
-        
-        system_accumulated_stopped = sum(list(episode_accumulated_stopped.values()))
+        system_accumulated_stopped = sum(list(episode_accumulated_stopped.values()))        # Accumulated number of cars stopped at each step for all agents
 
         # Calculate the maximum of all max speeds observed from each agent during the episode
         agent_max_speeds = {agent:0 for agent in agents}
