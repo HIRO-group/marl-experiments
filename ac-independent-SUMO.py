@@ -40,6 +40,8 @@ import sumo_rl
 import sys
 from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
+from calculate_speed_control import CalculateMaxSpeedOverage
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
@@ -112,9 +114,26 @@ if using_sumo:
                                 max_green=args.max_green,
                                 min_green=args.min_green,
                                 num_seconds=args.sumo_seconds,
+                                add_system_info=True,       # Default is True
+                                add_per_agent_info=True,    # Default is True                                
                                 reward_fn=MaxSpeedRewardFunction,
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)
+        
+    elif (args.sumo_reward == "custom-average-speed-limit"):
+        # Use the custom "avg speed limit" reward function
+        print ( " > Using CUSTOM AVERAGE SPEED LIMIT reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                add_system_info=True,       # Default is True
+                                add_per_agent_info=True,    # Default is True                                
+                                reward_fn=AverageSpeedLimitReward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)        
     else:
         print ( " > Using standard reward")
         # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
@@ -124,6 +143,8 @@ if using_sumo:
                                 max_green=args.max_green,
                                 min_green=args.min_green,
                                 num_seconds=args.sumo_seconds,
+                                add_system_info=True,       # Default is True
+                                add_per_agent_info=True,    # Default is True                                       
                                 reward_fn=args.sumo_reward,
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)
@@ -166,7 +187,7 @@ with open(f"{csv_dir}/episode_reward.csv", "w", newline="") as csvfile:
 #   i.e. if four agents observed max speeds of [6.6, 7.0, 10.0, 12.0] during the episode, 
 #   system_episode_min_max_speed would return 6.6 and system_episode_max_speed would return 12.0
 with open(f"{csv_dir}/episode_max_speeds.csv", "w", newline="") as csvfile:
-    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'global_step'])    
+    csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_accumulated_stopped', 'global_step'])    
     csv_writer.writeheader()
 
 random.seed(args.seed)
@@ -277,11 +298,13 @@ print(" > Device: ",device.__repr__())
 if args.render:
     env.render()    # TODO: verify that the sumo env supports render
 
-episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
-episode_max_speeds = {agent: [] for agent in agents}    # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
-actions = {agent: None for agent in agents}             # Dictionary that maps each agent to the action it selected
-losses = {agent: None for agent in agents}              # Dictionary that maps each agent to the loss values for its critic network
-actor_losses = {agent: None for agent in agents}        # Dictionary that maps each agent to the loss values for its actor network
+episode_rewards = {agent: 0 for agent in agents}                # Dictionary that maps the each agent to its cumulative reward each episode
+episode_max_speeds = {agent: [] for agent in agents}            # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
+episode_avg_speed_rewards = {agent: 0 for agent in agents}      # Dictionary that maps each agent to the avg speed reward obbtained by each agent
+episode_accumulated_stopped = {agent: 0 for agent in agents}
+actions = {agent: None for agent in agents}                     # Dictionary that maps each agent to the action it selected
+losses = {agent: None for agent in agents}                      # Dictionary that maps each agent to the loss values for its critic network
+actor_losses = {agent: None for agent in agents}                # Dictionary that maps each agent to the loss values for its actor network
 lir_1 = 0
 uir_1 = 0
 var_1 = 0
@@ -346,8 +369,17 @@ for global_step in range(args.total_timesteps):
         
         episode_rewards[agent] += rewards[agent]
         # TODO: need to modify this for global observations
-        episode_max_speeds[agent].append(next_obses[agent][-1]) # max speed is the last element of the custom observation array
-        
+        episode_max_speeds[agent].append(next_obses[agent][-1])         # max speed is the last element of the custom observation array
+        agent_avg_speed = next_obses[agent][-2]       # Avg speed reward has been added to observation (as the second to last element)   # TODO: want to use obses not next_obses here?
+        # SPEED_LIMIT = 10.0
+        SPEED_LIMIT = 7.0
+        avg_speed_reward = CalculateMaxSpeedOverage(max_speed=agent_avg_speed, 
+                                                    speed_limit=SPEED_LIMIT,
+                                                    lower_speed_limit=SPEED_LIMIT)
+        episode_avg_speed_rewards[agent] += avg_speed_reward
+        info = env.unwrapped.env._compute_info()                # The wrapper class needs to be unwrapped for some reason in order to properly access info 
+        episode_accumulated_stopped[agent] += info[f'{agent}_stopped']     # Total number of cars stopped at this agent
+
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
 
     # ALGO LOGIC: critic training
@@ -500,7 +532,10 @@ for global_step in range(args.total_timesteps):
 
     # If all agents are done, log the results and reset the evnironment to continue training
     if np.prod(list(dones.values())) or (global_step % args.max_cycles == args.max_cycles-1): 
-        system_episode_reward = sum(list(episode_rewards.values()))         # Accumulated reward of all agents
+        system_episode_reward = sum(list(episode_rewards.values()))                         # Accumulated reward of all agents
+        system_episode_avg_speed_reward = sum(list(episode_avg_speed_rewards.values()))     # Accumulated avg speed reward of all agents
+        
+        system_accumulated_stopped = sum(list(episode_accumulated_stopped.values()))
 
         # Calculate the maximum of all max speeds observed from each agent during the episode
         agent_max_speeds = {agent:0 for agent in agents}
@@ -508,12 +543,18 @@ for global_step in range(args.total_timesteps):
             agent_max_speeds[agent] = max(episode_max_speeds[agent])
         system_episode_max_speed = max(list(agent_max_speeds.values()))
         system_episode_min_max_speed = min(list(agent_max_speeds.values()))
-        print(" >>> agent_max_speeds {}".format(agent_max_speeds))
-        print(" >>> system_episode_max_speed {}".format(system_episode_max_speed))
-        print(" >>> system_episode_min_max_speed {}".format(system_episode_min_max_speed))
-
+        
+        info = env.unwrapped.env._compute_info()                # The wrapper class needs to be unwrapped for some reason in order to properly access info 
+        agents_total_stopped = info['agents_total_stopped']     # TOtal number of cars stopped at end of episode
+        
+        print(f"\n > global_step={global_step}")
+        print(f"   > agent_max_speeds {agent_max_speeds}")
+        print(f"   > system_episode_max_speed {system_episode_max_speed}")
+        print(f"   > system_episode_min_max_speed {system_episode_min_max_speed}")
+        print(f"   > system total avg speed reward: {system_episode_avg_speed_reward}")
         # TRY NOT TO MODIFY: record rewards for plotting purposes
-        print(f" >>> global_step={global_step}, system_episode_reward={system_episode_reward}")
+        print(f"   > system reward: {system_episode_reward} using definition: {args.sumo_reward}")
+        print(f"   > total cars stopped at end of episode: {agents_total_stopped}")
         diff_1 = uir_1-lir_1
         # var_1 = var_1/(cnt-1e-7)
         lir_2 = min(episode_rewards.values())
@@ -521,14 +562,14 @@ for global_step in range(args.total_timesteps):
         diff_2 = uir_2-lir_2
         var_2 = np.var(list(episode_rewards.values())) 
         
-        print(f" >>> system_episode_diff_1={diff_1}")
-        print(f" >>> uir1={uir_1}")
-        print(f" >>> lir1={lir_1}")
-        print(f" >>> system_variance1={var_1}")
-        print(f" >>> system_episode_diff_2={diff_2}")
-        print(f" >>> uir2={uir_2}")
-        print(f" >>> lir2={lir_2}")
-        print(f" >>> system_variance2={var_2}")
+        print(f"   > system_episode_diff_1={diff_1}")
+        print(f"   > uir1={uir_1}")
+        print(f"   > lir1={lir_1}")
+        print(f"   > system_variance1={var_1}")
+        print(f"   > system_episode_diff_2={diff_2}")
+        print(f"   > uir2={uir_2}")
+        print(f"   > lir2={lir_2}")
+        print(f"   > system_variance2={var_2}")
 
         # Logging should only be done after we've started training, up until then, the agents are just getting experience
         if global_step > args.learning_starts:
@@ -552,9 +593,10 @@ for global_step in range(args.total_timesteps):
                 csv_writer.writerow({**episode_rewards, **{'system_episode_reward': system_episode_reward, 'global_step': global_step}})
 
             with open(f"{csv_dir}/episode_max_speeds.csv", "a", newline="") as csvfile:
-                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'global_step'])
+                csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 'system_episode_min_max_speed', 'system_accumulated_stopped', 'global_step'])
                 csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
                                                             'system_episode_min_max_speed': system_episode_min_max_speed,
+                                                            'system_accumulated_stopped' : system_accumulated_stopped,
                                                             'global_step': global_step}})
 
             # If we're using the SUMO env, also save some data specific to that environment
@@ -593,6 +635,8 @@ for global_step in range(args.total_timesteps):
 
         # Reset dictionaries for next episode
         episode_rewards = {agent: 0 for agent in agents}
+        episode_avg_speed_rewards = {agent: 0 for agent in agents}
+        episode_accumulated_stopped = {agent: 0 for agent in agents}
         episode_max_speeds = {agent: [0] for agent in agents} 
         actions = {agent: None for agent in agents}
 

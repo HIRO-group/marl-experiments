@@ -48,6 +48,8 @@ If you'd like to create your own experiment using a different environment and se
 ## Configuration Parameter Definitions
 Coming soon...
 
+- max-cycles: TODO: should be set to sumo-seconds when it exists, this variable tells the learning algorithm when to reset during training, it is not used for analysis purposes so online rollouts will run for all sumo-seconds even if max-cycles is less 
+
 # List of Implemented Algorithms
 Coming soon...
 

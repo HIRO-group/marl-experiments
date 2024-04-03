@@ -17,16 +17,20 @@ def CalculateMaxSpeedOverage(max_speed:float,
         pension = max_speed - speed_limit
         # If the max speed is greater than then threshold, return the negative 
         # of the pension (i.e. difference)
-        return (-1.0 * np.sqrt(pension))
-        
+        # return (-1.0 * np.sqrt(pension))        
+
     # DEBUGGING:
     ##### elif max_speed <= 5.0:  
     ##### Also just take out this elif statement, do we still have "flipped" plot without the lower bound???
 
     elif max_speed <= lower_speed_limit:   
-        pension = speed_limit - max_speed
-        return (-1.0 * np.sqrt(pension))
-    
+    #     # pension = speed_limit - max_speed
+    #     # return (-1.0 * np.sqrt(pension))    
+
+        pension = lower_speed_limit - max_speed
+
     else:
+        pension = 0.0
         # If the max speed is within the bounds, just return 0
-        return 0.0
+        
+    return (-1.0 * pension)
