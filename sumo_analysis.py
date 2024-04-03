@@ -31,7 +31,7 @@ from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
 # Config Parser
 from MARLConfigParser import MARLConfigParser
 from actor_critic import Actor
-from calculate_speed_control import CalculateMaxSpeedOverage
+from calculate_speed_control import CalculateSpeedError
 
 
 # Make sure SUMO env variable is set
@@ -103,16 +103,8 @@ if __name__ == "__main__":
     parser = MARLConfigParser()
     args = parser.parse_args()
     
-
-    # SPEED_OVERAGE_THRESHOLD  = 13.89
-    # SPEED_LOWER_THRESHOLD = 0.0
-    # SPEED_LOWER_THRESHOLD = 0.01
-    # SPEED_LOWER_THRESHOLD = 1.0
-    # SPEED_LOWER_THRESHOLD = 5.0
-    # SPEED_LOWER_THRESHOLD = SPEED_OVERAGE_THRESHOLD
-    # SPEED_LIMIT = 10.0
-    SPEED_LIMIT = 7.0
-
+    # TODO: config
+    SPEED_LIMIT = 7.0   # The limit used to evaluate avg speed error (the g1 metric)
 
     if not args.seed:
         args.seed = int(datetime.now()) 
@@ -128,7 +120,6 @@ if __name__ == "__main__":
     print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
     print(" > Loading NN policy from training step {} from directory: {}".format(analysis_steps, nn_directory))
 
-
     # Create the env
     # Sumo must be created using the sumo-rl module
     # Note we have to use the parallel env here to conform to this implementation of dqn
@@ -138,19 +129,20 @@ if __name__ == "__main__":
         print ( " > Evaluating model using CUSTOM reward")
         env = sumo_rl.parallel_env(net_file=args.net, 
                                 route_file=args.route,
-                                # use_gui=True,
+                                use_gui=True,
                                 max_green=args.max_green,
                                 min_green=args.min_green,
                                 num_seconds=args.sumo_seconds,
                                 reward_fn=MaxSpeedRewardFunction,
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)
+        
     elif (args.sumo_reward == "custom-average-speed-limit"):
         # Use the custom "avg speed limit" reward function
         print ( " > Evaluating model using CUSTOM AVERAGE SPEED LIMIT reward")
         env = sumo_rl.parallel_env(net_file=args.net, 
                                 route_file=args.route,
-                                use_gui=args.sumo_gui,
+                                use_gui=True,
                                 max_green=args.max_green,
                                 min_green=args.min_green,
                                 num_seconds=args.sumo_seconds,
@@ -164,7 +156,7 @@ if __name__ == "__main__":
         # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
         env = sumo_rl.parallel_env(net_file=args.net, 
                                 route_file=args.route,
-                                # use_gui=True,
+                                use_gui=True,
                                 max_green=args.max_green,
                                 min_green=args.min_green,
                                 num_seconds=args.sumo_seconds,
@@ -179,10 +171,9 @@ if __name__ == "__main__":
     observation_spaces = env.observation_spaces
     onehot_keys = {agent: i for i, agent in enumerate(agents)}
     
-    episode_rewards = {agent: 0 for agent in agents}                # Dictionary that maps the each agent to its cumulative reward each episode
-    # episode_avg_speed_rewards = {agent: 0 for agent in agents}      # Dictionary that maps each agent to the avg speed reward obbtained by each agent
-    episode_constraint_1 = {agent: 0 for agent in agents}
-    episode_constraint_2 = {agent: 0 for agent in agents}
+    episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
+    episode_constraint_1 = {agent: 0 for agent in agents}   # Dictionary that maps each agent to its accumulated g1 metric
+    episode_constraint_2 = {agent: 0 for agent in agents}   # Dictionary that maps each agent to its accumulated g2 metric
     
     print("\n=================== Environment Information ===================")
     print(" > agents: {}".format(agents))
@@ -288,11 +279,9 @@ if __name__ == "__main__":
             system_accumulated_g2 = sum(list(episode_constraint_2.values()))
 
             print(f" > Rollout complete after {sumo_step} steps")
-            print(f"   >> TOTAL EPISODE REWARD: {system_episode_reward} using reward: {args.sumo_reward}")
-            # print(f"   >> TOTAL EPISODE AVERAGE SPEED REWARD: {system_episode_avg_speed_reward}")
-            # print(f"   >> TOTAL EPISODE g1: {system_accumulated_g1} using upper speed limit: {SPEED_OVERAGE_THRESHOLD} and lower speed limit: {SPEED_LOWER_THRESHOLD}")
-            print(f"   >> TOTAL EPISODE g1: {system_accumulated_g1} using speed limit: {SPEED_LIMIT}")
-            print(f"   >> TOTAL EPISODE g2: {system_accumulated_g2}")
+            print(f"    > TOTAL EPISODE REWARD: {system_episode_reward} using reward: {args.sumo_reward}")
+            print(f"    > TOTAL EPISODE g1: {system_accumulated_g1} using speed limit: {SPEED_LIMIT}")
+            print(f"    > TOTAL EPISODE g2: {system_accumulated_g2}")
 
             break
 
@@ -311,23 +300,19 @@ if __name__ == "__main__":
                     onehot[onehot_keys[agent]] = 1.0
                     next_obses[agent] = np.hstack([onehot, next_obses[agent]])
 
-        # Accumulate the total episode reward
+        # Accumulate the total episode reward and g1/g2 metrics
         for agent in agents:
             episode_rewards[agent] += rewards[agent]
-            # episode_avg_speed_rewards[agent] += next_obses[agent][-2]   # Avg speed reward has been added to observation (as the second to last element) 
-            max_speed_observed_by_agent = next_obses[agent][-1]         # max speed is the last element of the custom observation array
-            # TODO: may change g1 to avg-speed instead of max speed
-
             info = env.unwrapped.env._compute_info()                    # The wrapper class needs to be unwrapped for some reason in order to properly access info                
             agent_cars_stopped = info[f'{agent}_stopped']               # Get the per-agent number of stopped cars from the info dictionary
-            # agent_avg_speed = info[f'{agent}_average_speed'] # Get the average speed 
             agent_avg_speed = next_obses[agent][-2]                     # Average (true average) speed has been added to observation as second to last element
-            # episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
-            #                                                         speed_limit=SPEED_OVERAGE_THRESHOLD,
-            #                                                         lower_speed_limit=SPEED_LOWER_THRESHOLD)
-            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=agent_avg_speed, 
-                                                                    speed_limit=SPEED_LIMIT,
-                                                                    lower_speed_limit=SPEED_LIMIT)
+
+            # g1 metric
+            episode_constraint_1[agent] += CalculateSpeedError(max_speed=agent_avg_speed, 
+                                                            speed_limit=SPEED_LIMIT,
+                                                            lower_speed_limit=SPEED_LIMIT)
+            
+            # g2 metric
             episode_constraint_2[agent] += agent_cars_stopped
 
         obses = next_obses
