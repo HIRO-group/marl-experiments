@@ -40,7 +40,7 @@ from MARLConfigParser import MARLConfigParser
 # Custom modules
 from actor_critic import Actor, QNetwork, one_hot_q_values
 from dataset import Dataset
-from calculate_speed_control import CalculateMaxSpeedOverage
+from calculate_speed_control import CalculateSpeedError
 
 # Set up the system and environement
 # Make sure SUMO env variable is set
@@ -53,7 +53,7 @@ else:
 
 def GenerateDataset(env: sumo_rl.parallel_env,
                     list_of_policies: list,
-                    exceess_speed_action_ratio:float = 0.4,
+                    avg_speed_action_ratio:float = 0.4,
                     queue_action_ratio:float = 0.4, 
                     num_episodes:int=100, 
                     episode_steps:int=1000,
@@ -61,9 +61,9 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     """
     :param env: The sumo environment
     :param list_of_policies: A list of trained neural networks used to generate the dataset by acting in the environment
-        NOTE: This function assumes that the list of policies is ordered like [excess_speed_model, queue_model]
-    :param excess_speed_action_ratio: The fraction of actions that should come from the queue policy when generating  
-            the dataset, if excess_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
+        NOTE: This function assumes that the list of policies is ordered like [avg_speed_model, queue_model]
+    :param avg_speed_action_ratio: The fraction of actions that should come from the queue policy when generating  
+            the dataset, if avg_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
             will come from a completely random policy e.g. if 0.4 all actions come from "excess speed" and 0.4 come from
             "queue" then 0.2 of all actions will be random
     :param queue_action_ratio: The fraction of actions that should come from the queue policy when generating the 
@@ -80,15 +80,12 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     start_time = datetime.now()
 
     DATASET_SIZE = num_episodes*episode_steps
-    SPEED_OVERAGE_THRESHOLD = 13.89 # TODO: config
-    # SPEED_LOWER_THRESHOLD = 0.01
-    # SPEED_LOWER_THRESHOLD = 5.0
-    # SPEED_LOWER_THRESHOLD = 0.0
-    SPEED_LOWER_THRESHOLD = 1.0
+
+    SPEED_LIMIT = 7.0
     
     agents = env.possible_agents
     num_agents = len(agents)
-    optimal_action_ratio = exceess_speed_action_ratio + queue_action_ratio  # Ratio of optimal actions that should be in this dataset
+    optimal_action_ratio = avg_speed_action_ratio + queue_action_ratio  # Ratio of optimal actions that should be in this dataset
 
     onehot_keys = {agent: i for i, agent in enumerate(agents)}
 
@@ -100,7 +97,7 @@ def GenerateDataset(env: sumo_rl.parallel_env,
     action_spaces = env.action_spaces
 
     # Define dictionaries to hold the values of the constraints (g1 and g2) each step
-    constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its (-1) * MAX SPEED OVERAGE for this step
+    constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its (-1) * AVG SPEED ERROR for this step
     constraint_2 = {agent : 0 for agent in agents}  # Maps each agent to the (-1) * NUBMER OF CARS STOPPED for this step
 
     for episode in range(num_episodes):
@@ -151,10 +148,10 @@ def GenerateDataset(env: sumo_rl.parallel_env,
 
             # Caclulate constraints and add the experience to the dataset
             for agent in agents:
-                 max_speed_observed_by_agent = next_obses[agent][-1]
-                 constraint_1[agent] = CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
-                                                                speed_limit=SPEED_OVERAGE_THRESHOLD,
-                                                                lower_speed_limit=SPEED_LOWER_THRESHOLD)
+                 avg_speed_observed_by_agent = next_obses[agent][-2]
+                 constraint_1[agent] = CalculateSpeedError(speed=avg_speed_observed_by_agent, 
+                                                            speed_limit=SPEED_LIMIT,
+                                                            lower_speed_limit=SPEED_LIMIT)
                  constraint_2[agent] = rewards[agent]   # NOTE: This assumes that the environment was configured with the "queue" reward
                  dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
 
@@ -180,35 +177,27 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
 
     :param queue_length_env: The SUMO environment to execute the policy in, assumes that the reward has been set to "queue"
     :param policies_to_use: Dictionary that maps agents to "actor" models to use for the evaluation
-    :param reward_to_evaluate: Either "queue" or "speed_overage", determines which metric to compute during the episode
+    :param reward_to_evaluate: Either "queue" or "average-speed-limit", determines which metric to compute during the episode
     :param config_args: Configuration arguments used to set up the experiment
-    :returns: Either average "queue" reward per step (averaged for all agents) or average "speed overage" reward per step 
+    :returns: Either average "queue" reward per step (averaged for all agents) or average "average speed error" reward per step 
             (averaged for all agents)
     """
     # TODO: update function to support global observations
     
     # Determine if a proper reward evaluation was requested
-    if (reward_to_evaluate != 'speed_overage') and (reward_to_evaluate != 'queue'):
+    if (reward_to_evaluate != 'average-speed-limit') and (reward_to_evaluate != 'queue'):
         print(f"  > ERROR: Unrecognized reward evaluation '{reward_to_evaluate}' requested")
-        print(f"  > Function only supports 'speed_overage' or 'queue'")
-        return 0.0
+        print(f"  > Function only supports 'average-speed-limit' or 'queue'")
+        sys.exit(1)
     
 
-    # Define the speed overage threshold used to evaluate the g1 constraint 
-    # (note this needs to match what is used in GenerateDataset)
-    SPEED_OVERAGE_THRESHOLD = 13.89
-    # SPEED_LOWER_THRESHOLD = 0.01
-    # SPEED_LOWER_THRESHOLD = 5.0
-    # SPEED_LOWER_THRESHOLD = 0.0
-    SPEED_LOWER_THRESHOLD = 1.0 
+    # Define the speed limit used to evaluate the g1 constraint 
+    SPEED_LIMIT = 7.0
 
     agents = queue_length_env.possible_agents
 
     # Define empty dictionary that maps agents to actions
-    actions = {agent: None for agent in agents}
-
-    # Dictionary that maps the each agent to its cumulative reward each episode
-    episode_rewards = {agent: 0.0 for agent in agents}            
+    actions = {agent: None for agent in agents}      
 
     # Maps each agent to its MAX SPEED OVERAGE for this step        
     episode_constraint_1 = {agent : 0.0 for agent in agents}  
@@ -253,15 +242,14 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
 
         # Accumulate the total episode reward and max speeds
         for agent in agents:
-            # At the end of a simulation, next_obses is an empty dictionary so don't log it 
-            episode_rewards[agent] += rewards[agent]        # NOTE This should be the same as episode_constraint_2 if the env was configured correctly
-            max_speed_observed_by_agent = next_obses[agent][-1]
-            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
-                                                                    speed_limit=SPEED_OVERAGE_THRESHOLD,
-                                                                    lower_speed_limit=SPEED_LOWER_THRESHOLD)
+            avg_speed_observed_by_agent = next_obses[agent][-2]
+            episode_constraint_1[agent] += CalculateSpeedError(speed=avg_speed_observed_by_agent, 
+                                                               speed_limit=SPEED_LIMIT,
+                                                               lower_speed_limit=SPEED_LIMIT)
             episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
                 
         obses = next_obses
+
     print(f"   > Rollout complete after {sumo_step} steps")
     print(f"    > Constraint 1 total return: {sum(episode_constraint_1.values())}")
     print(f"    > Constraint 2 total return: {sum(episode_constraint_2.values())}")
@@ -269,7 +257,7 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
         print(f"      > Agent '{agent}' constraint 1 return: {episode_constraint_1[agent]}")
         print(f"      > Agent '{agent}' constraint 2 return: {episode_constraint_2[agent]}")
 
-    if (reward_to_evaluate == 'speed_overage'):
+    if (reward_to_evaluate == 'average-speed-limit'):
         # Average value per step for each agent
         avg_g1s_per_step = [agent_g1_total_returns/sumo_step for agent_g1_total_returns in episode_constraint_1.values()]
         print(f"      > Average g1s per step for each agent: \n{avg_g1s_per_step}")
@@ -298,93 +286,12 @@ def NormalizeDataset(dataset:dict,
     :param constraint_ratio: The ratio to use in the weight adjustment, used to determine where the g1 constraint 
             should be applied between the upper and lower bounds
     :param g1_upper_bound: Upper bound to apply to g1 values in the dataset, should be the average reward per step 
-            (avg of all agents) when evaluating the excess speed policy according to the excess speed reward
+            (avg of all agents) when evaluating the average speed policy according to the average speed reward
     :param g2_lower_bound: Lower bound to apply to g1 values in the dataset, should be the average reward per step 
-            (avg of all agents) when evaluating the excess speed policy according to the excess speed reward
+            (avg of all agents) when evaluating the queue policy according to the average speed reward
 
     :returns Dictionary that maps agents to normalized datasets
     """
-    # # # print(f" > Normalizing dataset constraint values")
-    # # # # Intialize dataset
-    # # # normalized_dataset = {}
-
-    # # # total_c_g1 = 0.0
-    # # # total_c_g2 = 0.0
-
-    # # # for agent in dataset.keys():
-        
-    # # #     # Initialize constraint bounds
-    # # #     C_g1 = 0.0
-    # # #     C_g2 = 0.0
-        
-    # # #     G_1 = 0.0
-    # # #     G_2 = 0.0
-
-    # # #     normalized_g1s = []
-    # # #     normalized_g2s = []
-
-    # # #     # Number of experience tuples for this agent
-    # # #     n = len(dataset[agent].buffer)
-    # # #     print(f"  >> Agent '{agent}' buffer size: {n} ")
-
-    # # #     normalized_dataset[agent] = Dataset(n)
-        
-    # # #     # Calculate the bounds for the g1 and g2 constraints
-    # # #     for i in range(n):
-    # # #         s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
-    # # #         C_g1 += s_g1s
-    # # #         C_g2 += s_g2s
-
-    # # #     C_g1 = C_g1 / n * (1.0 + constraint_ratio)
-    # # #     # C_g2 = C_g2 / n * (1.0 - constraint_ratio)    
-
-    # # #     # Now apply the bounds to the g1 and g2 observations
-    # # #     for i in range(n):
-    # # #         s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].buffer[i]
-            
-    # # #         g1_normalized = min(C_g1, s_g1s) - C_g1
-    # # #         normalized_g1s.append(g1_normalized)
-    # # #         G_1 += g1_normalized
-
-    # # #         # g2_normalized = min(C_g2, s_g2s) - C_g2   
-    # # #         g2_normalized = s_g2s # No constraint for g2
-    # # #         normalized_g2s.append(g2_normalized)
-    # # #         G_2 += g2_normalized
-            
-    # # #     for i in range(n):
-    # # #         s_obses, s_actions, s_next_obses, _, _, s_dones = dataset[agent].buffer[i]
-            
-    # # #         # Calculate normalized g1 and g2
-    # # #         # NOTE: weirdly, the best response we have seen (both g1 and g2 reaching maximal returns) occured 
-    # # #         # without this step... 
-    # # #         # Not sure why
-    # # #         g1_n = normalized_g1s[i]/abs(G_1)
-    # # #         if g1_n > 0.0:
-    # # #             print(f" > ERROR: normalized g1 = {g1_n}, algorithm assumes g1 < 0")
-    # # #             sys.exit()
-
-    # # #         g2_n = normalized_g2s[i]/abs(G_2)
-    # # #         if g2_n > 0.0:
-    # # #             print(f" > ERROR: normalized g2 = {g2_n}, algorithm assumes g2 < 0")
-    # # #             sys.exit()
-            
-
-    # # #         # Add it to the new dataset
-    # # #         normalized_dataset[agent].put((s_obses, s_actions, s_next_obses, g1_n, g2_n, s_dones))
-
-    # # #     total_c_g1 += C_g1
-    # # #     total_c_g2 += C_g2
-    # # #     print(f"  >> Agent: {agent}")
-    # # #     print(f"   >>> C_g1 = {C_g1}")
-    # # #     print(f"   >>> C_g2 = {C_g2}")
-
-    # # #     print(f"   >>> G_1 = {G_1}")
-    # # #     print(f"   >>> G_2 = {G_2}")
-
-    # # # # These can be thought of as the constraints to show on the plots from online rollouts
-    # # # print(f" > total_c_g1 = {total_c_g1}")  
-    # # # print(f" > total_c_g2 = {total_c_g2}")
-
 
     print(f" > Normalizing dataset constraint values")
     normalized_dataset = {}
@@ -427,9 +334,6 @@ def NormalizeDataset(dataset:dict,
             s_obses, s_actions, s_next_obses, _, _, s_dones = dataset[agent].buffer[i]
 
             # Calculate normalized g1 and g2
-            # NOTE: weirdly, the best response we have seen (both g1 and g2 reaching maximal returns) occured
-            # without this step...
-            # Not sure why
             g1_n = adjusted_g1s[i]/abs(G_1)
             if (g1_n > 0.0):
                 print(f" > ERROR: normalized g1 = {g1_n}, algorithm assumes g1 < 0")
@@ -642,12 +546,12 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                     csv_save_dir,
                                     mean_constraint_suffixes[0],    # Assumes order was [g1, g2]
                                     config_args, 
-                                    constraint="speed_overage")
+                                    constraint="average-speed-limit")
 
         # Save the value function every round
         # Format is constraint_<round>-<agent>.pt
         for a in agents:
-            torch.save(G1_pi[a].state_dict(), f"{nn_save_dir}/constraints/speed_overage/constraint_{t}-{a}.pt")
+            torch.save(G1_pi[a].state_dict(), f"{nn_save_dir}/constraints/avg_speed_limit/constraint_{t}-{a}.pt")
 
 
         # Evaluate G_2^pi 
@@ -700,7 +604,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # Save the mean value function each round
         # Format is constraint_<round>-<agent>.pt
         for a in agents:
-            torch.save(mean_g1_constraints[a].state_dict(), f"{nn_save_dir}/constraints/speed_overage/mean/constraint_{t}-{a}.pt")
+            torch.save(mean_g1_constraints[a].state_dict(), f"{nn_save_dir}/constraints/avg_speed_limit/mean/constraint_{t}-{a}.pt")
 
 
         # Calculate 1/t*(g2 + t-1(E[g2])) for each agent
@@ -795,7 +699,7 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # TODO: make this more generic
         threshold_policy = dataset_policies[0]
-        print(f"  > Performing online rollout for speed overage policy")
+        print(f"  > Performing online rollout for average speed limit policy")
         _, threshold_policy_g1_return, threshold_policy_g2_return = PerformRollout(env, threshold_policy, config_args)
 
         queue_policy = dataset_policies[1]
@@ -896,7 +800,7 @@ def FittedQIteration(observation_spaces:dict,
     :param dataset: Dictionary that maps each agent to its experience tuple
     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
     :param config_args: Configuration arguments used to set up the experiment
-    :param constraint: 'speed_overage', 'queue', or 'weighted_sum' defines how the target should be determined while learning the policy
+    :param constraint: 'average-speed-limit', 'queue', or 'weighted_sum' defines how the target should be determined while learning the policy
     :param lambda_1: Weight corresponidng to the G1 constraints, if constraint is 'weighted_sum' this must be provided
     :param lambda_2: Weight corresponidng to the G2 constraints, if constraint is 'weighted_sum' this must be provided
     :returns A dictionary that maps each agent to its learned policy
@@ -977,7 +881,7 @@ def FittedQIteration(observation_spaces:dict,
                     # Calculate the full TD target 
                     # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
-                    if (constraint == "speed_overage"):
+                    if (constraint == "average-speed-limit"):
                         # Use the "g1" constraint
                         td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
@@ -1149,7 +1053,7 @@ def FittedQEvaluation(observation_spaces:dict,
     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
     :param csv_file_suffix: String to append to the name of the csv file to differentiate between which mean constraint value function is being evaluated
     :param config_args: Configuration arguments used to set up the experiment
-    :param constraint: 'speed_overage' or 'queue', defines how the target should be determined while learning the value function
+    :param constraint: 'average-speed-limit' or 'queue', defines how the target should be determined while learning the value function
     :returns A dictionary that maps each agent to its learned constraint value function
     """
 
@@ -1236,7 +1140,7 @@ def FittedQEvaluation(observation_spaces:dict,
                     # Calculate the full TD target 
                     # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                     # learn the policy
-                    if (constraint == "speed_overage"):
+                    if (constraint == "average-speed-limit"):
                         # Use the "g1" constraint
                         td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
@@ -1525,7 +1429,7 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
     :param config_args: Config arguments used to set up the experiment
     :returns a Dictionary that maps each agent to its expectation E_t[g] = 1/t*(g_t + (t-1)*E_t-1[g])
     """
-    print(f" >> Evaluating Mean Constraint: '{csv_file_suffix}'")
+    print(f"  > Evaluating Mean Constraint: '{csv_file_suffix}'")
     start_time = datetime.now()
 
     losses = {agent: None for agent in agents}       # Dictionary that maps each agent to the loss values for its network
@@ -1643,8 +1547,8 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
                 csv_writer.writerow({**losses, **{'global_step' : global_step, 'round' : round}})
 
     stop_time = datetime.now()
-    print(" >> Mean constraint function evaluation complete")
-    print(" >>> Total execution time: {}".format(stop_time-start_time))
+    print("   > Mean constraint function evaluation complete")
+    print("   > Total execution time: {}".format(stop_time-start_time))
 
     # If we're using parameter sharing, there is only a single network so to conform to the rest of the code, return a dictionary that maps
     # each agent to it's policy network
@@ -1671,13 +1575,9 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[di
     """
     # TODO: update function to support global observations
 
-    # Define the speed overage threshold used to evaluate the g1 constraint
+    # Define the speed limit used to evaluate the g1 constraint
     # (note this needs to match what is used in GenerateDataset)
-    SPEED_OVERAGE_THRESHOLD = 13.89
-    # SPEED_LOWER_THRESHOLD = 0.01
-    # SPEED_LOWER_THRESHOLD = 5.0
-    # SPEED_LOWER_THRESHOLD = 0.0
-    SPEED_LOWER_THRESHOLD = 1.0
+    SPEED_LIMIT = 7.0 
 
     agents = env.possible_agents
 
@@ -1741,12 +1641,11 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[di
 
         # Accumulate the total episode reward and max speeds
         for agent in agents:
-            # At the end of a simulation, next_obses is an empty dictionary so don't log it 
             episode_rewards[agent] += rewards[agent]
-            max_speed_observed_by_agent = next_obses[agent][-1]
-            episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
-                                                                    speed_limit=SPEED_OVERAGE_THRESHOLD,
-                                                                    lower_speed_limit=SPEED_LOWER_THRESHOLD)
+            avg_speed_observed_by_agent = next_obses[agent][-2]
+            episode_constraint_1[agent] += CalculateSpeedError(speed=avg_speed_observed_by_agent, 
+                                                                speed_limit=SPEED_LIMIT,
+                                                                lower_speed_limit=SPEED_LIMIT)
             episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
 
                 
@@ -1758,6 +1657,7 @@ def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[di
 def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)->dict:
     """
     :param value_function: Dictionary that maps agents to the learned value function for a given constraint
+    :param policies: Dictionary that maps agents to the policy that should be used to select actions from the mini_dataset for evaluation
     :param mini_dataset: A subset of the larger dataset that contains experience tuples that are evaluated in the rollout
             using the provided dataset
             NOTE: This function assumes the dataset has been sampled such that mini_dataset contains lists of of experience
@@ -1782,7 +1682,6 @@ def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)
 
         # Add up the max values of all states from the mini dataset
         cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
-        # print(f"   > cumulative_return for agent '{agent}': {cumulative_return[agent]}")
 
     return cumulative_return
 
@@ -1806,8 +1705,9 @@ def OnlineLambdaLearning(lambda_1_prev:float,
 
     # Lambda learning rate # TODO: config
     # n = 0.01
+    n = 0.001
     # n = 0.00001
-    n = 0.1
+    # n = 0.1
 
     exp_g1_returns = np.exp(n * avg_cumulative_g1_returns)
     exp_g2_returns = np.exp(n * avg_cumulative_g2_returns)
@@ -1826,12 +1726,14 @@ def OnlineLambdaLearningByImprovementRate(lambda_1_prev:float,
                             g1_returns:dict,
                             g2_returns:dict,
                             avg_cumulative_g1_returns_prev:float,
-                            avg_cumulative_g2_returns_prev:float)->(float, float, float, float):
+                            avg_cumulative_g2_returns_prev:float)->tuple[float, float, float, float]:
     """
     :param lambda_1_prev: The value of lambda1 at the end of the previous round
     :param lambda_2_prev: The value of lambda2 at the end of the previous round
     :param g1_returns: Dictionary that maps agents to the G1 returns from an offline rollout (assessed using the G1 value function for this round)
     :param g2_returns: Dictionary that maps agents to the G2 returns from an offline rollout (assessed using the G1 value function for this round)
+    :param avg_cumulative_g1_returns_prev:
+    :param avg_cumulative_g2_returns_prev:
     :returns Updated values for lambda1 and lambda2
     """
 
@@ -1841,7 +1743,8 @@ def OnlineLambdaLearningByImprovementRate(lambda_1_prev:float,
     avg_cumulative_g2_returns = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy() / num_agents
 
     # Lambda learning rate # TODO: config
-    n = 0.1
+    # n = 0.1
+    n = 0.001
     # n = 0.01
     # n = 0.00001
     # n = 1
@@ -1871,15 +1774,12 @@ if __name__ == "__main__":
         args.seed = int(datetime.now())
 
     device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
-    #device = 'cpu'
     print(f" > DEVICE: {device}")
-    analysis_steps = args.analysis_steps                        # Defines which checkpoint will be loaded into the Q model
-    parameter_sharing_model = args.parameter_sharing_model      # Flag indicating if we're loading a model from DQN with PS
-    nn_queue_dir = f"{args.nn_queue_directory}"                 # Name of directory containing the stored queue model nn from training
-    nn_speed_overage_dir = f"{args.nn_speed_overage_directory}" # Name of directory containing the stored speed overage model nn from training
 
-    print(f"  > nn_queue_directory: {nn_queue_dir}")
-    print(f"  > nn_speed_overage_dir: {nn_speed_overage_dir}")
+    analysis_steps = args.analysis_steps                            # Defines which checkpoint will be loaded into the Q model
+    parameter_sharing_model = args.parameter_sharing_model          # Flag indicating if we're loading a model from DQN with PS
+    nn_queue_dir = f"{args.nn_queue_directory}"                     # Name of directory containing the stored queue model nn from training
+    nn_avg_speed_limit_dir = f"{args.nn_speed_overage_directory}"   # Name of directory containing the stored speed overage model nn from training
 
     # Initialize directories for logging, note that that models will be saved to subfolders created in the directory that was used to 
     # generate the dataset
@@ -1889,7 +1789,7 @@ if __name__ == "__main__":
     csv_save_dir = f"{save_dir}/csv"
     os.makedirs(f"{save_dir}/policies/mean")
     os.makedirs(f"{save_dir}/constraints/queue/mean")
-    os.makedirs(f"{save_dir}/constraints/speed_overage/mean")
+    os.makedirs(f"{save_dir}/constraints/avg_speed_limit/mean")
     os.makedirs(csv_save_dir)
 
     print("  > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
@@ -1935,7 +1835,7 @@ if __name__ == "__main__":
     list_of_policies = []
     eg_agent = agents[0]
     queue_model_policies = {}  # Dictionary for storing q-networks (maps agent to a q-network)
-    speed_overage_model_policies = {}    
+    avg_speed_limit_model_policies = {}    
 
     if parameter_sharing_model:
         # In this case, each agent will still have it's own network, they will just be copies of each other
@@ -1957,15 +1857,15 @@ if __name__ == "__main__":
         print(" > Loading NN from file: {} for 'queue' policy".format(nn_queue_file))
 
         # Speed overage model policies
-        speed_overage_model_policy = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
+        avg_speed_limit_model_policy = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
 
         # Load the Q-network file
-        nn_speed_overage_file = "{}/{}.pt".format(nn_speed_overage_dir, analysis_steps)
-        speed_overage_model_policy.load_state_dict(torch.load(nn_speed_overage_file))
-        print(" > Loading NN from file: {} for 'speed threshold' policy".format(nn_speed_overage_file))
+        nn_avg_speed_limit_file = "{}/{}.pt".format(nn_avg_speed_limit_dir, analysis_steps)
+        avg_speed_limit_model_policy.load_state_dict(torch.load(nn_avg_speed_limit_file))
+        print(" > Loading NN from file: {} for 'average speed limit' policy".format(nn_avg_speed_limit_file))
 
         for agent in agents: 
-            speed_overage_model_policies[agent] = speed_overage_model_policy
+            avg_speed_limit_model_policies[agent] = avg_speed_limit_model_policy
             queue_model_policies[agent] = queue_model_policy
 
 
@@ -1976,7 +1876,7 @@ if __name__ == "__main__":
         for agent in agents:
             observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
             queue_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n)
-            speed_overage_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n)
+            avg_speed_limit_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n)
 
             # Queue model policies
             nn_queue_file = "{}/{}-{}.pt".format(nn_queue_dir, analysis_steps, agent)
@@ -1984,12 +1884,12 @@ if __name__ == "__main__":
             print(" > Loading NN from file: {} for 'queue' policy".format(nn_queue_file))
 
             # Repeat for speed overage model policies
-            nn_speed_overage_file = "{}/{}-{}.pt".format(nn_speed_overage_dir, analysis_steps, agent)
-            speed_overage_model_policies[agent].load_state_dict(torch.load(nn_speed_overage_file))
-            print(" > Loading NN from file: {} for 'speed threshold' policy".format(nn_speed_overage_file))
+            nn_avg_speed_limit_file = "{}/{}-{}.pt".format(nn_avg_speed_limit_dir, analysis_steps, agent)
+            avg_speed_limit_model_policies[agent].load_state_dict(torch.load(nn_avg_speed_limit_file))
+            print(" > Loading NN from file: {} for 'average speed limit' policy".format(nn_avg_speed_limit_file))
 
-    # List of policies is [speed_overage, queue] - the order is imporant
-    list_of_policies.append(speed_overage_model_policies)
+    # List of policies is [avg_speed_limit, queue] - the order is imporant
+    list_of_policies.append(avg_speed_limit_model_policies)
     list_of_policies.append(queue_model_policies)
 
     # Seed the env
@@ -2052,20 +1952,20 @@ if __name__ == "__main__":
         
     # Calculate the upper (i.e. less negative) bound of the g1 constraint 
     # This is the average reward per step (for all agents) of the excessive speed policy when evaluating it according 
-    # to the excessive speed (i.e. speed_overage) reward
+    # to the excessive speed (i.e. avg_speed_limit) reward
     print(f" > Calculating g1 constraint upper bound using 'speed overage' policies")
     g1_upper_bound = CalculateAverageRewardPerStep(queue_length_env=env,
-                                                   policies_to_use=speed_overage_model_policies,
-                                                   reward_to_evaluate='speed_overage',
+                                                   policies_to_use=avg_speed_limit_model_policies,
+                                                   reward_to_evaluate='average-speed-limit',
                                                    config_args=args)
     
     # Calculate the lower (i.e. more negative) bound of the g1 constraint  
     # This is the average reward per step (for all agents) of the queue length policy when evaluating it according 
-    # to the excessive speed (i.e. speed_overage) reward  
+    # to the excessive speed (i.e. avg_speed_limit) reward  
     print(f" > Calculating g1 constraint lower bound using 'queue' policies")
     g1_lower_bound = CalculateAverageRewardPerStep(queue_length_env=env,
                                                    policies_to_use=queue_model_policies,
-                                                   reward_to_evaluate='speed_overage',
+                                                   reward_to_evaluate='average-speed-limit',
                                                    config_args=args)
     print(f" > Applying constraints to dataset")
     print(f"   > g1_upper_bound: {g1_upper_bound}")
