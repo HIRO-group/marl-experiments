@@ -1695,7 +1695,7 @@ def OnlineLambdaLearning(lambda_1_prev:float,
     :param lambda_2_prev: The value of lambda2 at the end of the previous round
     :param g1_returns: Dictionary that maps agents to the G1 returns from an offline rollout (assessed using the G1 value function for this round)
     :param g2_returns: Dictionary that maps agents to the G2 returns from an offline rollout (assessed using the G1 value function for this round)
-    :returns Updated values for lambda1 and lambda2
+    :returns Updated values for lambda1 and lambda2 as well as the average cumulative G1 and G2 returns from the offline rollouts of all agents 
     """
 
     # Calculate the accumulated returns (averaged over all agents)
@@ -1707,8 +1707,9 @@ def OnlineLambdaLearning(lambda_1_prev:float,
     # n = 0.01
     n = 0.001
     # n = 0.00001
-    # n = 0.1
+    # n = 1.0
 
+    print(f"  > using lambda learning rate of: {n}")
     exp_g1_returns = np.exp(n * avg_cumulative_g1_returns)
     exp_g2_returns = np.exp(n * avg_cumulative_g2_returns)
 
@@ -1732,9 +1733,9 @@ def OnlineLambdaLearningByImprovementRate(lambda_1_prev:float,
     :param lambda_2_prev: The value of lambda2 at the end of the previous round
     :param g1_returns: Dictionary that maps agents to the G1 returns from an offline rollout (assessed using the G1 value function for this round)
     :param g2_returns: Dictionary that maps agents to the G2 returns from an offline rollout (assessed using the G1 value function for this round)
-    :param avg_cumulative_g1_returns_prev:
-    :param avg_cumulative_g2_returns_prev:
-    :returns Updated values for lambda1 and lambda2
+    :param avg_cumulative_g1_returns_prev: The average cumulative G1 return from the offline rollouts of all agents determined previous round
+    :param avg_cumulative_g2_returns_prev: The average cumulative G2 return from the offline rollouts of all agents determined previous round
+    :returns Updated values for lambda1 and lambda2 as well as the average cumulative G1 and G2 returns from the offline rollouts of all agents
     """
 
     # Calculate the accumulated returns (averaged over all agents)
@@ -1748,6 +1749,7 @@ def OnlineLambdaLearningByImprovementRate(lambda_1_prev:float,
     # n = 0.01
     # n = 0.00001
     # n = 1
+    print(f"  > using lambda learning improvement rate of: {n}")
 
     g1_improvment_rate = (avg_cumulative_g1_returns-avg_cumulative_g1_returns_prev)/avg_cumulative_g1_returns_prev
     g2_improvment_rate = (avg_cumulative_g2_returns-avg_cumulative_g2_returns_prev)/avg_cumulative_g2_returns_prev

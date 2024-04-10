@@ -3,5 +3,6 @@ runs/
 csv/
 analysis/
 batch_offline_RL_logs/
+baseline_models/
 .venv/
 __pycache__/
