@@ -37,7 +37,7 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 # Config Parser
 from MARLConfigParser import MARLConfigParser
 from actor_critic import Actor, QNetwork
-from calculate_speed_control import CalculateMaxSpeedOverage
+from calculate_speed_control import CalculateSpeedError
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -92,9 +92,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # TODO: config
-    SPEED_OVERAGE_THRESHOLD  = 13.89
-    # SPEED_LOWER_THRESHOLD = 0.0
-    SPEED_LOWER_THRESHOLD = 1.0
+    SPEED_LIMIT = 7.0
 
     # Create CSV file to store the data
     nn_directory = args.nn_directory     # TODO: just use nn_dir instead???   
@@ -187,7 +185,7 @@ if __name__ == "__main__":
         onehot_keys = {agent: i for i, agent in enumerate(agents)}
         episode_rewards = {agent: 0 for agent in agents}            # Dictionary that maps the each agent to its cumulative reward each episode
         episode_max_speeds = {agent: [] for agent in agents}        # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
-        # episode_pressures = {agent: [] for agent in agents}       # Dictionary that maps each agent to the pressure at each step of the agent's episode (pressure = #veh leaving - #veh approaching of the intersection)
+        episode_avg_speeds = {agent: [] for agent in agents}        # Dictionary that maps each agent to the avg speed observed at each step of the agent's episode
         episode_constraint_1 = {agent: 0 for agent in agents}
         episode_constraint_2 = {agent: 0 for agent in agents}
 
@@ -290,6 +288,7 @@ if __name__ == "__main__":
                 system_episode_min_max_speed = min(list(agent_max_speeds.values()))
 
                 # Calculate ASO max at the last step of the episode
+                SPEED_OVERAGE_THRESHOLD = 13.89
                 aso_max = CalculateASOMax(episode_max_speeds, SPEED_OVERAGE_THRESHOLD)
                 print("    > EPISODE ASO MAX: {} using speed limit of: {}".format(aso_max, SPEED_OVERAGE_THRESHOLD))
 
@@ -311,15 +310,15 @@ if __name__ == "__main__":
                     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_episode_max_speed', 
                                                                             'system_episode_min_max_speed', 
                                                                             'system_aso_max', 
-                                                                            'system_accumulated_speed_overage (g1)', 
+                                                                            'system_accumulated_avg_speed_error (g1)', 
                                                                             'system_accumulated_queue (g2)',
                                                                             'system_total_stopped', 
                                                                             'nn_step'])
                     csv_writer.writerow({**agent_max_speeds, **{'system_episode_max_speed': system_episode_max_speed,
                                                             'system_episode_min_max_speed': system_episode_min_max_speed,
                                                             'system_aso_max': aso_max,
-                                                            'system_accumulated_speed_overage (g1)' : system_accumulated_g1, 
-                                                            'system_accumulated_queue (g2)' : system_accumulated_g2, 
+                                                            'system_accumulated_avg_speed_error (g1)' : system_accumulated_g1, 
+                                                            'system_accumulated_queue (g2)' : system_accumulated_g2,
                                                             'system_total_stopped': system_total_stopped,
                                                             'nn_step': saved_step}})
                 
@@ -327,10 +326,7 @@ if __name__ == "__main__":
                 print("    > NOTE: The reward function being used to evaluate this model may not match the reward function used to train the model")
 
                 # Go to the next policy
-                break
-    
-                # Accumulate the total episode reward and max speeds
-            
+                break            
 
             # The simulation is not complete, so update the observation for the next step
             # If the parameter sharing model was used, we have to add one hot encoding to the observations
@@ -350,11 +346,15 @@ if __name__ == "__main__":
 
             for agent in agents:
                 episode_rewards[agent] += rewards[agent]
-                max_speed_observed_by_agent = next_obses[agent][-1] # max speed is the last element of the custom observation array
+                
+                max_speed_observed_by_agent = next_obses[agent][-1]
                 episode_max_speeds[agent].append(max_speed_observed_by_agent)
-                episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed=max_speed_observed_by_agent, 
-                                                                        speed_limit=SPEED_OVERAGE_THRESHOLD,
-                                                                        lower_speed_limit=SPEED_LOWER_THRESHOLD)
+
+                avg_speed_observed_by_agent = next_obses[agent][-2]
+                episode_avg_speeds[agent].append(avg_speed_observed_by_agent)
+                episode_constraint_1[agent] += CalculateSpeedError(max_speed=avg_speed_observed_by_agent, 
+                                                                        speed_limit=SPEED_LIMIT,
+                                                                        lower_speed_limit=SPEED_LIMIT)
                 info = env.unwrapped.env._compute_info()    # The wrapper class needs to be unwrapped for some reason in order to properly access info                
                 agent_cars_stopped = info[f'{agent}_stopped']   # Get the per-agent number of stopped cars from the info dictionary
                 episode_constraint_2[agent] += agent_cars_stopped

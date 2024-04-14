@@ -368,7 +368,7 @@ for global_step in range(args.total_timesteps):
     cnt += 1
 
     for agent in agents:
-        
+
         episode_rewards[agent] += rewards[agent]
         # TODO: need to modify this for global observations
         episode_max_speeds[agent].append(next_obses[agent][-1])     # max speed is the last element of the custom observation array
@@ -399,7 +399,7 @@ for global_step in range(args.total_timesteps):
             q_values = q_network.forward(s_obses)
             # Get the max Q(s,a) for each observation in the batch
             old_val = q_values.gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
-            
+
             loss = loss_fn(td_target, old_val)
             losses[agent] = loss.item()
 

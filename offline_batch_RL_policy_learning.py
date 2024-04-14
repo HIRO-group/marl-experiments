@@ -894,7 +894,7 @@ def FittedQIteration(observation_spaces:dict,
                         td_target = torch.Tensor(lambda_1 * s_g1s).to(device) + torch.Tensor(lambda_2 * s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
                     else: 
                         print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
-                        return {}
+                        sys.exit(1)
 
                 q_values = q_network.forward(s_obses)
                 old_val = q_network.forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
@@ -960,7 +960,7 @@ def FittedQIteration(observation_spaces:dict,
                         # Calculate the full TD target 
                         # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
                         # learn the policy
-                        if (constraint == "speed_overage"):
+                        if (constraint == "average-speed-limit"):
                             # Use the "g1" constraint
                             td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
@@ -973,7 +973,7 @@ def FittedQIteration(observation_spaces:dict,
                             td_target = torch.Tensor(lambda_1 * s_g1s).to(device) + torch.Tensor(lambda_2 * s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
                         else: 
                             print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
-                            return {}
+                            sys.exit(1)
 
                     q_values = q_network[agent].forward(s_obses)
                     old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
@@ -1138,7 +1138,7 @@ def FittedQEvaluation(observation_spaces:dict,
                     target = target_network.forward(s_next_obses).gather(1, torch.Tensor(actions_for_agent).view(-1,1).to(device)).squeeze()
                     
                     # Calculate the full TD target 
-                    # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
+                    # NOTE that the target in this Fitted Q evaluation implementation depends on the type of constraint we are using to 
                     # learn the policy
                     if (constraint == "average-speed-limit"):
                         # Use the "g1" constraint
@@ -1149,7 +1149,8 @@ def FittedQEvaluation(observation_spaces:dict,
                         td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
                     else: 
-                        print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Iteration".format(constraint))
+                        print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Evaluation".format(constraint))
+                        sys.exit(1)
 
                 # Calculate "previous" value using actions from the experience dataset
                 old_val = q_network.forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
@@ -1199,9 +1200,9 @@ def FittedQEvaluation(observation_spaces:dict,
                         target = target_network[agent].forward(s_next_obses).gather(1, torch.Tensor(actions_for_agent).view(-1,1).to(device)).squeeze()
                         
                         # Calculate the full TD target 
-                        # NOTE that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
+                        # NOTE that the target in this Fitted Q evaluation implementation depends on the type of constraint we are using to 
                         # learn the policy
-                        if (constraint == "speed_overage"):
+                        if (constraint == "average-speed-limit"):
                             # Use the "g1" constraint
                             td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
@@ -1210,7 +1211,8 @@ def FittedQEvaluation(observation_spaces:dict,
                             td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
                         else: 
-                            print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Iteration".format(constraint))
+                            print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Evaluation".format(constraint))
+                            sys.exit(1)
 
                     # Calculate "previous" value using actions from the experience dataset
                     old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()

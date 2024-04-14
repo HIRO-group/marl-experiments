@@ -153,7 +153,6 @@ print(" > observation_spaces:\n {}".format(observation_spaces))
 onehot_keys = {agent: i for i, agent in enumerate(agents)}
 print(" > onehot_keys:\n {}".format(onehot_keys))
 
-# TODO: Plotting loss is currently disabled for this implementation - see below
 with open(f"{csv_dir}/td_loss.csv", "w", newline="") as csvfile:
     csv_writer = csv.DictWriter(csvfile, fieldnames=agents+['system_loss', 'global_step'])
     csv_writer.writeheader()

@@ -39,16 +39,15 @@ def MaxSpeedRewardFunction(ts:TrafficSignal):
             pension = 0.0
 
         # Find the max speed of all vehicles in the intersection
-        # TODO: We could consider average speed here as well         
         for v in vehs:
             speed = ts.sumo.vehicle.getSpeed(v)
-            if speed > max_speed:
+            if (speed > max_speed):
                 max_speed = speed
 
-        if max_speed > SPEED_THRESHOLD:
+        if (max_speed > SPEED_THRESHOLD):
             pension = max_speed - SPEED_THRESHOLD
         
-        elif max_speed <= LOWER_SPEED_THRESHOLD: 
+        elif (max_speed <= LOWER_SPEED_THRESHOLD): 
             pension = LOWER_SPEED_THRESHOLD - max_speed
             
         else:

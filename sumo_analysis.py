@@ -273,7 +273,6 @@ if __name__ == "__main__":
         # If the simulation is done, print the episode reward and close the env
         if np.prod(list(dones.values())):
             system_episode_reward = sum(list(episode_rewards.values()))                         # Accumulated reward of all agents
-            # system_episode_avg_speed_reward = sum(list(episode_avg_speed_rewards.values()))     # Accumulated avg speed reward of all agents
             
             system_accumulated_g1 = sum(list(episode_constraint_1.values()))
             system_accumulated_g2 = sum(list(episode_constraint_2.values()))
