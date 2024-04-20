@@ -198,6 +198,7 @@ if __name__ == "__main__":
         q_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
         
         # Load the Q-network file
+        # TODO Update this to support loading policies from batch offline algo
         nn_file = "{}/{}.pt".format(nn_dir, analysis_steps)
         q_network.load_state_dict(torch.load(nn_file))
 
@@ -307,7 +308,7 @@ if __name__ == "__main__":
             agent_avg_speed = next_obses[agent][-2]                     # Average (true average) speed has been added to observation as second to last element
 
             # g1 metric
-            episode_constraint_1[agent] += CalculateSpeedError(max_speed=agent_avg_speed, 
+            episode_constraint_1[agent] += CalculateSpeedError(speed=agent_avg_speed, 
                                                             speed_limit=SPEED_LIMIT,
                                                             lower_speed_limit=SPEED_LIMIT)
             

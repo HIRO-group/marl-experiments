@@ -375,7 +375,7 @@ for global_step in range(args.total_timesteps):
         agent_avg_speed = next_obses[agent][-2]                     # Avg speed reward has been added to observation (as the second to last element)   
         # TODO: config
         SPEED_LIMIT = 7.0
-        avg_speed_reward = CalculateSpeedError(max_speed=agent_avg_speed, 
+        avg_speed_reward = CalculateSpeedError(speed=agent_avg_speed, 
                                             speed_limit=SPEED_LIMIT,
                                             lower_speed_limit=SPEED_LIMIT)
         episode_avg_speed_rewards[agent] += avg_speed_reward

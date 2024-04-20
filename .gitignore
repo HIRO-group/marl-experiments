@@ -6,3 +6,5 @@ batch_offline_RL_logs/
 baseline_models/
 .venv/
 __pycache__/
+# Temporarily leave out test files
+*test*
