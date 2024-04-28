@@ -37,7 +37,7 @@ from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
-from actor_critic import Actor, QNetwork
+from rl_core.actor_critic import Actor, QNetwork
 from calculate_speed_control import CalculateSpeedError
 
 # Make sure SUMO env variable is set

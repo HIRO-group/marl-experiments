@@ -38,11 +38,14 @@ from sumo_custom_reward import MaxSpeedRewardFunction
 from MARLConfigParser import MARLConfigParser
 
 # Custom modules
-from actor_critic import Actor, QNetwork, one_hot_q_values
-from dataset import Dataset
-from calculate_speed_control import CalculateSpeedError
+from rl_core.actor_critic import Actor, QNetwork, one_hot_q_values
+from rl_core.fitted_q_evaluation import FittedQEvaluation
+from rl_core.fitted_q_iteration import FittedQIteration
+from rl_core.rollout import OfflineRollout, OnlineRollout
 
-# Set up the system and environement
+from marl_utils.dataset import Dataset, GenerateDataset
+from calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
+
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
     tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
@@ -51,120 +54,124 @@ else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
 
-def GenerateDataset(env: sumo_rl.parallel_env,
-                    list_of_policies: list,
-                    avg_speed_action_ratio:float = 0.4,
-                    queue_action_ratio:float = 0.4, 
-                    num_episodes:int=100, 
-                    episode_steps:int=1000,
-                    parameter_sharing_model:bool=False) -> dict:
-    """
-    :param env: The sumo environment
-    :param list_of_policies: A list of trained neural networks used to generate the dataset by acting in the environment
-        NOTE: This function assumes that the list of policies is ordered like [avg_speed_model, queue_model]
-    :param avg_speed_action_ratio: The fraction of actions that should come from the queue policy when generating  
-            the dataset, if avg_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
-            will come from a completely random policy e.g. if 0.4 all actions come from "excess speed" and 0.4 come from
-            "queue" then 0.2 of all actions will be random
-    :param queue_action_ratio: The fraction of actions that should come from the queue policy when generating the 
-            dataset, if excess_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
-            will come from a completely random policy e.g. if 0.4 all actions come from "excess speed" and 0.4 come from
-            "queue" then 0.2 of all actions will be random
-    :param num_episodes: number of episodes to run to populate the dataset
-    :param episode_steps: number of steps to take in each episode
-    :param parameter_sharing_model: Flag indicating if parameter sharing was used to generate the policies that are
-            being used to generate the dataset, if yes, each agent will still get its own unique dataset
-    :returns a dictionary that maps each agent to 
-    """
-    print(f"  >> Generating dataset with {num_episodes} episodes of {episode_steps} steps")
-    start_time = datetime.now()
+# def GenerateDataset(env: sumo_rl.parallel_env,
+#                     list_of_policies: list,
+#                     avg_speed_action_ratio:float = 0.4,
+#                     queue_action_ratio:float = 0.4, 
+#                     num_episodes:int=100, 
+#                     episode_steps:int=1000,
+#                     parameter_sharing_model:bool=False) -> dict:
+#     """
+#     :param env: The sumo environment
+#     :param list_of_policies: A list of trained neural networks used to generate the dataset by acting in the environment
+#         NOTE: This function assumes that the list of policies is ordered like [avg_speed_model, queue_model]
+#     :param avg_speed_action_ratio: The fraction of actions that should come from the queue policy when generating  
+#             the dataset, if avg_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
+#             will come from a completely random policy e.g. if 0.4 all actions come from "excess speed" and 0.4 come from
+#             "queue" then 0.2 of all actions will be random
+#     :param queue_action_ratio: The fraction of actions that should come from the queue policy when generating the 
+#             dataset, if excess_speed_action_ratio + queue_action_ratio are less than 1, the remaining fraction of actions
+#             will come from a completely random policy e.g. if 0.4 all actions come from "excess speed" and 0.4 come from
+#             "queue" then 0.2 of all actions will be random
+#     :param num_episodes: number of episodes to run to populate the dataset
+#     :param episode_steps: number of steps to take in each episode
+#     :param parameter_sharing_model: Flag indicating if parameter sharing was used to generate the policies that are
+#             being used to generate the dataset, if yes, each agent will still get its own unique dataset
+#     :returns a dictionary that maps each agent to 
+#     """
+#     print(f"  >> Generating dataset with {num_episodes} episodes of {episode_steps} steps")
+#     start_time = datetime.now()
 
-    DATASET_SIZE = num_episodes*episode_steps
+#     DATASET_SIZE = num_episodes*episode_steps
 
-    SPEED_LIMIT = 7.0
+#     SPEED_LIMIT = 7.0
     
-    agents = env.possible_agents
-    num_agents = len(agents)
-    optimal_action_ratio = avg_speed_action_ratio + queue_action_ratio  # Ratio of optimal actions that should be in this dataset
+#     agents = env.possible_agents
+#     num_agents = len(agents)
+#     optimal_action_ratio = avg_speed_action_ratio + queue_action_ratio  # Ratio of optimal actions that should be in this dataset
 
-    onehot_keys = {agent: i for i, agent in enumerate(agents)}
+#     onehot_keys = {agent: i for i, agent in enumerate(agents)}
 
-    # Initialize the dataset as a dictionary that maps agents to Dataset objects that are full of experience
-    dataset = {agent : Dataset(DATASET_SIZE) for agent in agents}
+#     # Initialize the dataset as a dictionary that maps agents to Dataset objects that are full of experience
+#     dataset = {agent : Dataset(DATASET_SIZE) for agent in agents}
 
-    # Define empty dictionary tha maps agents to actions
-    actions = {agent: None for agent in agents}
-    action_spaces = env.action_spaces
+#     # Define empty dictionary tha maps agents to actions
+#     actions = {agent: None for agent in agents}
+#     action_spaces = env.action_spaces
 
-    # Define dictionaries to hold the values of the constraints (g1 and g2) each step
-    constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its (-1) * AVG SPEED ERROR for this step
-    constraint_2 = {agent : 0 for agent in agents}  # Maps each agent to the (-1) * NUBMER OF CARS STOPPED for this step
+#     # Define dictionaries to hold the values of the constraints (g1 and g2) each step
+#     constraint_1 = {agent : 0 for agent in agents}  # Maps each agent to its (-1) * AVG SPEED ERROR for this step
+#     constraint_2 = {agent : 0 for agent in agents}  # Maps each agent to the (-1) * NUBMER OF CARS STOPPED for this step
 
-    for episode in range(num_episodes):
-        print(f"   >>> Generating episode: {episode}")
+#     for episode in range(num_episodes):
+#         print(f"   >>> Generating episode: {episode}")
 
-        # Reset the environment
-        obses, _ = env.reset()
+#         # Reset the environment
+#         obses, _ = env.reset()
 
-        if parameter_sharing_model:
-            # If parameter sharing is being used, one-hot encoding must be applied to the observations to match the 
-            # dimensions of each agent's policy network
+#         if parameter_sharing_model:
+#             # If parameter sharing is being used, one-hot encoding must be applied to the observations to match the 
+#             # dimensions of each agent's policy network
 
-            for agent in agents:
-                onehot = np.zeros(num_agents)
-                onehot[onehot_keys[agent]] = 1.0
-                obses[agent] = np.hstack([onehot, obses[agent]])            
+#             for agent in agents:
+#                 onehot = np.zeros(num_agents)
+#                 onehot[onehot_keys[agent]] = 1.0
+#                 obses[agent] = np.hstack([onehot, obses[agent]])            
 
-        for step in range(episode_steps):
+#         for step in range(episode_steps):
 
-            # Set the action for each agent
-            for agent in agents:
+#             # Set the action for each agent
+#             for agent in agents:
     
-                # Select which policy to use according to the provided action ratios
-                q_network = np.random.choice(['random'] + list_of_policies, 1, p=[1-optimal_action_ratio, exceess_speed_action_ratio, queue_action_ratio])[0]
+#                 # Select which policy to use according to the provided action ratios
+#                 q_network = np.random.choice(['random'] + list_of_policies, 1, p=[1-optimal_action_ratio, avg_speed_action_ratio, queue_action_ratio])[0]
 
-                if (q_network == 'random'):
-                    # Use a random action
-                    actions[agent] = action_spaces[agent].sample()
+#                 if (q_network == 'random'):
+#                     # Use a random action
+#                     actions[agent] = action_spaces[agent].sample()
 
-                else:
-                    # Actor choses the actions
-                    action, _, _ = q_network[agent].to(device).get_action(obses[agent])
-                    actions[agent] = action.detach().cpu().numpy()
+#                 else:
+#                     # Actor choses the actions
+#                     action, _, _ = q_network[agent].to(device).get_action(obses[agent])
+#                     actions[agent] = action.detach().cpu().numpy()
 
-            # Apply all actions to the env
-            next_obses, rewards, dones, truncated, info = env.step(actions)
+#             # Apply all actions to the env
+#             next_obses, rewards, dones, truncated, info = env.step(actions)
             
-            if np.prod(list(dones.values())):
-                # Start the next episode
-                print(f"   >>> Episode complete at {step} steps, going to next episode")
-                break
+#             if np.prod(list(dones.values())):
+#                 # Start the next episode
+#                 print(f"   >>> Episode complete at {step} steps, going to next episode")
+#                 break
 
-            if parameter_sharing_model:
-                for agent in agents:
-                    onehot = np.zeros(num_agents)
-                    onehot[onehot_keys[agent]] = 1.0
-                    next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+#             if parameter_sharing_model:
+#                 for agent in agents:
+#                     onehot = np.zeros(num_agents)
+#                     onehot[onehot_keys[agent]] = 1.0
+#                     next_obses[agent] = np.hstack([onehot, next_obses[agent]])
 
-            # Caclulate constraints and add the experience to the dataset
-            for agent in agents:
-                 avg_speed_observed_by_agent = next_obses[agent][-2]
-                 constraint_1[agent] = CalculateSpeedError(speed=avg_speed_observed_by_agent, 
-                                                            speed_limit=SPEED_LIMIT,
-                                                            lower_speed_limit=SPEED_LIMIT)
-                 constraint_2[agent] = rewards[agent]   # NOTE: This assumes that the environment was configured with the "queue" reward
-                 dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
+#             # Caclulate constraints and add the experience to the dataset
+#             for agent in agents:
+#                 max_speed_observed_by_agent = next_obses[agent][-1]
+#                 avg_speed_observed_by_agent = next_obses[agent][-2]
 
-            obses = next_obses
+#                 # TODO: Make constraint definitions configurable
+#                 constraint_1[agent] = CalculateMaxSpeedPension(speed=max_speed_observed_by_agent) 
+#                 # constraint_1[agent] = CalculateSpeedError(speed=avg_speed_observed_by_agent, 
+#                 #                                             speed_limit=SPEED_LIMIT,
+#                 #                                             lower_speed_limit=SPEED_LIMIT)
+#                 constraint_2[agent] = rewards[agent]   # NOTE: This assumes that the environment was configured with the "queue" reward
+#                 dataset[agent].put((obses[agent], actions[agent], next_obses[agent], constraint_1[agent], constraint_2[agent], dones[agent]))
+
+#             obses = next_obses
 
 
-    stop_time = datetime.now()
-    print(" >> Dataset generation complete")
-    print(" >> Total execution time: {}".format(stop_time-start_time))
+#     stop_time = datetime.now()
+#     print(" >> Dataset generation complete")
+#     print(" >> Total execution time: {}".format(stop_time-start_time))
 
-    env.close()
+#     env.close()
 
-    return dataset
+#     return dataset
 
 def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
                                   policies_to_use:dict,
@@ -242,7 +249,9 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
 
         # Accumulate the total episode reward and max speeds
         for agent in agents:
+            max_speed_observed_by_agent = next_obses[agent][-1]
             avg_speed_observed_by_agent = next_obses[agent][-2]
+            # episode_constraint_1[agent] += CalculateMaxSpeedPension(speed=max_speed_observed_by_agent)
             episode_constraint_1[agent] += CalculateSpeedError(speed=avg_speed_observed_by_agent, 
                                                                speed_limit=SPEED_LIMIT,
                                                                lower_speed_limit=SPEED_LIMIT)
@@ -402,13 +411,14 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
 
     # Initialize csv files
-    with open(f"{csv_save_dir}/FQE_loss_{mean_constraint_suffixes[0]}.csv", "w", newline="") as csvfile:
-        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample','global_step'])
-        csv_writer.writeheader()
+    # TODO: move these to respective functions
+    # with open(f"{csv_save_dir}/FQE_loss_{mean_constraint_suffixes[0]}.csv", "w", newline="") as csvfile:
+    #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample','global_step'])
+    #     csv_writer.writeheader()
 
-    with open(f"{csv_save_dir}/FQE_loss_{mean_constraint_suffixes[1]}.csv", "w", newline="") as csvfile:
-        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample','global_step'])
-        csv_writer.writeheader()
+    # with open(f"{csv_save_dir}/FQE_loss_{mean_constraint_suffixes[1]}.csv", "w", newline="") as csvfile:
+    #     csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample','global_step'])
+    #     csv_writer.writeheader()
 
     with open(f"{csv_save_dir}/FQI_actor_loss.csv", "w", newline="") as csvfile:
         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
@@ -431,6 +441,17 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                         ['system_return_g1'] +
                                                         [agent + '_return_g2' for agent in agents] +
                                                         ['system_return_g2'] +
+                                                        
+                                                        [agent + '_threshold_policy_g1_return' for agent in agents] +
+                                                        ['threshold_policy_system_return_g1'] +
+                                                        [agent + '_threshold_policy_g2_return' for agent in agents] +
+                                                        ['threshold_policy_system_return_g2'] +
+
+                                                        [agent + '_queue_policy_g1_return' for agent in agents] +
+                                                        ['queue_policy_system_return_g1'] +
+                                                        [agent + '_queue_policy_g2_return' for agent in agents] +
+                                                        ['queue_policy_system_return_g2'] + 
+                                                        
                                                         ['lambda_1', 'lambda_2', 'mean_lambda_1', 'mean_lambda_2'])
         csv_writer.writeheader()
 
@@ -474,7 +495,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # Modify the observation space shape to include one-hot-encoding used for parameter sharing
         print(f"   > Parameter sharing enabled")
 
-        # onehot_keys = {agent: i for i, agent in enumerate(agents)}
         if config_args.global_obs:
             print(f"    > Global observations enabled")
             observation_space_shape = tuple((shape+1) * (num_agents) for shape in observation_spaces[eg_agent].shape)
@@ -633,25 +653,30 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # Perform offline rollouts using each value function and a small portion of the provided dataset
         # NOTE: The returns here are dictionaries that map agents to their return
         print(f" > EVALUATING G1_pi IN OFFLINE ROLLOUT")
-        g1_returns = PerformOfflineRollout(G1_pi, policies, rollout_mini_dataset)
+        g1_returns = OfflineRollout(G1_pi, policies, rollout_mini_dataset, device)
 
         print(f" > EVALUATING G2_pi IN OFFLINE ROLLOUT")
-        g2_returns = PerformOfflineRollout(G2_pi, policies, rollout_mini_dataset)
-        # TODO: perform some kind of similar rollout for the dataset policies to compare?
+        g2_returns = OfflineRollout(G2_pi, policies, rollout_mini_dataset, device)
 
+        # Generate offline rollouts using the dataset policies as well so we can compare them to the current policy's results
+        print(f" > EVALUATING G1_pi IN OFFLINE ROLLOUT USING THRESHOLD POLICY")
+        offline_g1_returns_threshold_policy = OfflineRollout(G1_pi, dataset_policies[0], rollout_mini_dataset, device)
 
-        # DEBUGGING:
-        offline_g1_returns_threshold_policy = PerformOfflineRollout(G1_pi, dataset_policies[0], rollout_mini_dataset)
-        offline_g2_returns_threshold_policy = PerformOfflineRollout(G2_pi, dataset_policies[0], rollout_mini_dataset)
-        offline_g1_returns_queue_policy = PerformOfflineRollout(G1_pi, dataset_policies[1], rollout_mini_dataset)
-        offline_g2_returns_queue_policy = PerformOfflineRollout(G2_pi, dataset_policies[1], rollout_mini_dataset)
-        print(f" > OFFLINE ROLLOUT RESULTS:")
-        print(f"   > CURRENT POLICY G1_pi: {torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()} ")
-        print(f"   > CURRENT POLICY G2_pi: {torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()} ")
-        print(f"   > THRESHOLD POLICY G1_pi: {torch.sum(torch.tensor(list(offline_g1_returns_threshold_policy.values()))).detach().numpy()} ")
-        print(f"   > THRESHOLD POLICY G2_pi: {torch.sum(torch.tensor(list(offline_g2_returns_threshold_policy.values()))).detach().numpy()} ")
-        print(f"   > QUEUE POLICY G1_pi: {torch.sum(torch.tensor(list(offline_g1_returns_queue_policy.values()))).detach().numpy()} ")
-        print(f"   > QUEUE POLICY G2_pi: {torch.sum(torch.tensor(list(offline_g2_returns_queue_policy.values()))).detach().numpy()} ")
+        print(f" > EVALUATING G2_pi IN OFFLINE ROLLOUT USING THRESHOLD POLICY")
+        offline_g2_returns_threshold_policy = OfflineRollout(G2_pi, dataset_policies[0], rollout_mini_dataset, device)
+        
+        print(f" > EVALUATING G1_pi IN OFFLINE ROLLOUT USING QUEUE POLICY")
+        offline_g1_returns_queue_policy = OfflineRollout(G1_pi, dataset_policies[1], rollout_mini_dataset, device)
+        
+        print(f" > EVALUATING G2_pi IN OFFLINE ROLLOUT USING QUEUE POLICY")
+        offline_g2_returns_queue_policy = OfflineRollout(G2_pi, dataset_policies[1], rollout_mini_dataset, device)
+        # print(f" > OFFLINE ROLLOUT RESULTS:")
+        # print(f"   > CURRENT POLICY G1_pi: {torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()} ")
+        # print(f"   > CURRENT POLICY G2_pi: {torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()} ")
+        # print(f"   > THRESHOLD POLICY G1_pi: {torch.sum(torch.tensor(list(offline_g1_returns_threshold_policy.values()))).detach().numpy()} ")
+        # print(f"   > THRESHOLD POLICY G2_pi: {torch.sum(torch.tensor(list(offline_g2_returns_threshold_policy.values()))).detach().numpy()} ")
+        # print(f"   > QUEUE POLICY G1_pi: {torch.sum(torch.tensor(list(offline_g1_returns_queue_policy.values()))).detach().numpy()} ")
+        # print(f"   > QUEUE POLICY G2_pi: {torch.sum(torch.tensor(list(offline_g2_returns_queue_policy.values()))).detach().numpy()} ")
 
         # NOTE: We are logging the lambda values produced by round X rather than the values used in
         # round X
@@ -674,15 +699,38 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
                                                             ['system_return_g1'] + 
                                                             [agent + '_return_g2' for agent in agents] + 
                                                             ['system_return_g2'] +
+                                                            
+                                                            [agent + '_threshold_policy_g1_return' for agent in agents] +
+                                                            ['threshold_policy_system_return_g1'] +
+                                                            [agent + '_threshold_policy_g2_return' for agent in agents] +
+                                                            ['threshold_policy_system_return_g2'] +
+
+                                                            [agent + '_queue_policy_g1_return' for agent in agents] +
+                                                            ['queue_policy_system_return_g1'] +
+                                                            [agent + '_queue_policy_g2_return' for agent in agents] +
+                                                            ['queue_policy_system_return_g2'] +
+                                                            
                                                             ['lambda_1', 'lambda_2', 'mean_lambda_1', 'mean_lambda_2'])
             new_row = {}
             new_row['round'] = t
             for agent in agents:
                 new_row[agent + '_return_g1'] = g1_returns[agent].item()
-            new_row['system_return_g1'] = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()
+            new_row['system_return_g1'] = torch.sum(torch.tensor(list(g1_returns.values()))).detach().numpy()   # TODO: update output of OfflineRollout to just be a dict rather than weird tensor thing
             for agent in agents:
                 new_row[agent + '_return_g2'] = g2_returns[agent].item()
             new_row['system_return_g2'] = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy()
+
+            for agent in agents:
+                new_row[agent + '_threshold_policy_g1_return'] = offline_g1_returns_threshold_policy[agent].item()
+                new_row[agent + '_threshold_policy_g2_return'] = offline_g2_returns_threshold_policy[agent].item()
+                new_row[agent + '_queue_policy_g1_return'] = offline_g1_returns_queue_policy[agent].item()
+                new_row[agent + '_queue_policy_g2_return'] = offline_g2_returns_queue_policy[agent].item()
+
+            new_row['threshold_policy_system_return_g1'] = torch.sum(torch.tensor(list(offline_g1_returns_threshold_policy.values()))).detach().numpy()
+            new_row['threshold_policy_system_return_g2'] = torch.sum(torch.tensor(list(offline_g2_returns_threshold_policy.values()))).detach().numpy()
+            new_row['queue_policy_system_return_g1'] = torch.sum(torch.tensor(list(offline_g1_returns_queue_policy.values()))).detach().numpy()
+            new_row['queue_policy_system_return_g2'] = torch.sum(torch.tensor(list(offline_g2_returns_queue_policy.values()))).detach().numpy()
+
             new_row['lambda_1'] = lambda_1
             new_row['lambda_2'] = lambda_2
             new_row['mean_lambda_1'] = mean_lambda_1
@@ -692,19 +740,19 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         # Now run some online rollouts to compare performance between the learned policy and the dataset policies
         print(f"  > Performing online rollout for mean policy")
-        _, mean_policy_g1_return, mean_policy_g2_return = PerformRollout(env, prev_mean_policies, config_args)
+        _, mean_policy_g1_return, mean_policy_g2_return = OnlineRollout(env, prev_mean_policies, config_args, device)
         
         print(f"  > Performing online rollout for current learned policy")
-        _, current_policy_g1_return, current_policy_g2_return = PerformRollout(env, policies, config_args)
+        _, current_policy_g1_return, current_policy_g2_return = OnlineRollout(env, policies, config_args, device)
 
         # TODO: make this more generic
         threshold_policy = dataset_policies[0]
         print(f"  > Performing online rollout for average speed limit policy")
-        _, threshold_policy_g1_return, threshold_policy_g2_return = PerformRollout(env, threshold_policy, config_args)
+        _, threshold_policy_g1_return, threshold_policy_g2_return = OnlineRollout(env, threshold_policy, config_args, device)
 
         queue_policy = dataset_policies[1]
         print(f"  > Performing online rollout for queue policy")
-        _, queue_policy_g1_return, queue_policy_g2_return = PerformRollout(env, queue_policy, config_args)
+        _, queue_policy_g1_return, queue_policy_g2_return = OnlineRollout(env, queue_policy, config_args, device)
 
         print(f"    > Speed overage policy system g1 return: {sum(threshold_policy_g1_return.values())}")
         print(f"    > Speed overage policy system g2 return: {sum(threshold_policy_g2_return.values())}")
@@ -779,480 +827,480 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
     return mean_policies, policies, mean_lambdas, lambdas
 
 
-def FittedQIteration(observation_spaces:dict,
-                     action_spaces:dict,
-                     agents:list,
-                     dataset:dict,
-                     csv_save_dir:str,
-                     config_args,
-                     constraint:str="",
-                     lambda_1:float=None,
-                     lambda_2:float=None) -> dict:
-    """
-    Implementation of Fitted Q Iteration with function approximation for offline learning of a policy
-    Note that this implementation utilizes an "actor-critic" approach to solve the RL problem
-    (algorithm 4 from Le, et. al)
+# def FittedQIteration(observation_spaces:dict,
+#                      action_spaces:dict,
+#                      agents:list,
+#                      dataset:dict,
+#                      csv_save_dir:str,
+#                      config_args,
+#                      constraint:str="",
+#                      lambda_1:float=None,
+#                      lambda_2:float=None) -> dict:
+#     """
+#     Implementation of Fitted Q Iteration with function approximation for offline learning of a policy
+#     Note that this implementation utilizes an "actor-critic" approach to solve the RL problem
+#     (algorithm 4 from Le, et. al)
 
-    :param observation_spaces: Dictionary that maps an agent to the dimensions of the env's raw observations space (assumes no one hot 
-            encoding has been applied)
-    :param action_spaces: Dictionary that maps agent to its action space
-    :param agents: List of agent names
-    :param dataset: Dictionary that maps each agent to its experience tuple
-    :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
-    :param config_args: Configuration arguments used to set up the experiment
-    :param constraint: 'average-speed-limit', 'queue', or 'weighted_sum' defines how the target should be determined while learning the policy
-    :param lambda_1: Weight corresponidng to the G1 constraints, if constraint is 'weighted_sum' this must be provided
-    :param lambda_2: Weight corresponidng to the G2 constraints, if constraint is 'weighted_sum' this must be provided
-    :returns A dictionary that maps each agent to its learned policy
-    """
+#     :param observation_spaces: Dictionary that maps an agent to the dimensions of the env's raw observations space (assumes no one hot 
+#             encoding has been applied)
+#     :param action_spaces: Dictionary that maps agent to its action space
+#     :param agents: List of agent names
+#     :param dataset: Dictionary that maps each agent to its experience tuple
+#     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
+#     :param config_args: Configuration arguments used to set up the experiment
+#     :param constraint: 'average-speed-limit', 'queue', or 'weighted_sum' defines how the target should be determined while learning the policy
+#     :param lambda_1: Weight corresponidng to the G1 constraints, if constraint is 'weighted_sum' this must be provided
+#     :param lambda_2: Weight corresponidng to the G2 constraints, if constraint is 'weighted_sum' this must be provided
+#     :returns A dictionary that maps each agent to its learned policy
+#     """
     
-    if config_args.global_obs:
-        print("ERROR: global observations not supported for FittedQIteration")
-        return {}
+#     if config_args.global_obs:
+#         print("ERROR: global observations not supported for FittedQIteration")
+#         return {}
 
-    print(" >> Beginning Fitted Q Iteration")
-    start_time = datetime.now()
+#     print(" >> Beginning Fitted Q Iteration")
+#     start_time = datetime.now()
 
-    if config_args.parameter_sharing_model:
-        # Parameter sharing is used so there is only a single actor and critic network
-        print(f"  >>> Parameter sharing enabled")
-        eg_agent = agents[0]
-        num_agents = len(agents)
+#     if config_args.parameter_sharing_model:
+#         # Parameter sharing is used so there is only a single actor and critic network
+#         print(f"  >>> Parameter sharing enabled")
+#         eg_agent = agents[0]
+#         num_agents = len(agents)
 
-        # TODO: change size of observation space if global observations are being used
-        observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
-        observation_space_shape = tuple(np.array([observation_space_shape]))   
+#         # TODO: change size of observation space if global observations are being used
+#         observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
+#         observation_space_shape = tuple(np.array([observation_space_shape]))   
             
-        q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device) 
-        actor_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device)
-        target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
-        target_network.load_state_dict(q_network.state_dict())    # Intialize the target network the same as the main network
-        optimizer = optim.Adam(q_network.parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
-        actor_optimizer = optim.Adam(list(actor_network.parameters()), lr=config_args.learning_rate)
-        actor_losses = {agent: None for agent in agents}       # Dictionary that maps each agent to the loss values for its actor network (used for logging)
+#         q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device) 
+#         actor_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device)
+#         target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
+#         target_network.load_state_dict(q_network.state_dict())    # Intialize the target network the same as the main network
+#         optimizer = optim.Adam(q_network.parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
+#         actor_optimizer = optim.Adam(list(actor_network.parameters()), lr=config_args.learning_rate)
+#         actor_losses = {agent: None for agent in agents}       # Dictionary that maps each agent to the loss values for its actor network (used for logging)
 
-    else:
-        print(f"  >>> Parameter sharing NOT enabled")
-        q_network = {}          # Dictionary for storing q-networks (maps agent to a q-network)
-        actor_network = {}      # Dictionary for storing actor networks (maps agents to a network)
-        target_network = {}     # Dictionary for storing target networks (maps agent to a network)
-        optimizer = {}          # Dictionary for storing optimizers for each RL problem
-        actor_optimizer = {}    # Dictionary for storing the optimizers used to train the actor networks 
-        actor_losses = {}       # Dictionary that maps each agent to the loss values for its actor network (used for logging)
+#     else:
+#         print(f"  >>> Parameter sharing NOT enabled")
+#         q_network = {}          # Dictionary for storing q-networks (maps agent to a q-network)
+#         actor_network = {}      # Dictionary for storing actor networks (maps agents to a network)
+#         target_network = {}     # Dictionary for storing target networks (maps agent to a network)
+#         optimizer = {}          # Dictionary for storing optimizers for each RL problem
+#         actor_optimizer = {}    # Dictionary for storing the optimizers used to train the actor networks 
+#         actor_losses = {}       # Dictionary that maps each agent to the loss values for its actor network (used for logging)
 
-        for agent in agents:
-            observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
-            q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device) 
-            actor_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
-            target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-            target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
-            optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
-            actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=config_args.learning_rate)
-            actor_losses[agent] = None
+#         for agent in agents:
+#             observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
+#             q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device) 
+#             actor_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
+#             target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+#             target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
+#             optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
+#             actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=config_args.learning_rate)
+#             actor_losses[agent] = None
 
-    # Define loss functions for the critic and actor
-    loss_fn = nn.MSELoss()
-    actor_loss_fn = nn.CrossEntropyLoss()
+#     # Define loss functions for the critic and actor
+#     loss_fn = nn.MSELoss()
+#     actor_loss_fn = nn.CrossEntropyLoss()
 
-    # Define a single experience sample that can be used to periodically evaluate the network to test for convergence
-    # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
-    eval_obses, eval_actions, eval_next_obses, eval_g1s, eval_g2s, eval_dones = dataset[agents[0]].sample(1)
+#     # Define a single experience sample that can be used to periodically evaluate the network to test for convergence
+#     # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
+#     eval_obses, eval_actions, eval_next_obses, eval_g1s, eval_g2s, eval_dones = dataset[agents[0]].sample(1)
 
-    for global_step in range(config_args.total_timesteps):
+#     for global_step in range(config_args.total_timesteps):
 
-        # TODO: remove?
-        if (global_step % config_args.train_frequency == 0):  
+#         # TODO: remove?
+#         if (global_step % config_args.train_frequency == 0):  
                 
-            if config_args.parameter_sharing_model:
-                # Agent is randomly selected to be used for calculating the Q values and targets
-                random_agent = random.choice(agents)
+#             if config_args.parameter_sharing_model:
+#                 # Agent is randomly selected to be used for calculating the Q values and targets
+#                 random_agent = random.choice(agents)
 
-                # Sample data from the dataset
-                # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
-                s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[random_agent].sample(config_args.batch_size)
-                # print(f"s_obses {s_obses}, s_actions {s_actions}, s_next_obses {s_next_obses}, s_g1s {s_g1s}, s_g2s {s_g2s}, s_dones {s_dones}")
-                # Compute the target
-                with torch.no_grad():
-                    # Calculate max_a Q(s',a)
-                    # NOTE: that the original FQI in the paper used min_a here but our constaint values are the negative version of theirs
-                    # so we need to take max here
-                    target_max = torch.max(target_network.forward(s_next_obses), dim=1).values
+#                 # Sample data from the dataset
+#                 # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
+#                 s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[random_agent].sample(config_args.batch_size)
+#                 # print(f"s_obses {s_obses}, s_actions {s_actions}, s_next_obses {s_next_obses}, s_g1s {s_g1s}, s_g2s {s_g2s}, s_dones {s_dones}")
+#                 # Compute the target
+#                 with torch.no_grad():
+#                     # Calculate max_a Q(s',a)
+#                     # NOTE: that the original FQI in the paper used min_a here but our constaint values are the negative version of theirs
+#                     # so we need to take max here
+#                     target_max = torch.max(target_network.forward(s_next_obses), dim=1).values
                     
-                    # Calculate the full TD target 
-                    # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
-                    # learn the policy
-                    if (constraint == "average-speed-limit"):
-                        # Use the "g1" constraint
-                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+#                     # Calculate the full TD target 
+#                     # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
+#                     # learn the policy
+#                     if (constraint == "average-speed-limit"):
+#                         # Use the "g1" constraint
+#                         td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
-                    elif (constraint == "queue"):
-                        # Use the "g2" constraint
-                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+#                     elif (constraint == "queue"):
+#                         # Use the "g2" constraint
+#                         td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
-                    elif (constraint == "weighted_sum"):
-                        # Use both g1 and g2 but weighted with lambda
-                        td_target = torch.Tensor(lambda_1 * s_g1s).to(device) + torch.Tensor(lambda_2 * s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
-                    else: 
-                        print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
-                        sys.exit(1)
+#                     elif (constraint == "weighted_sum"):
+#                         # Use both g1 and g2 but weighted with lambda
+#                         td_target = torch.Tensor(lambda_1 * s_g1s).to(device) + torch.Tensor(lambda_2 * s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+#                     else: 
+#                         print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
+#                         sys.exit(1)
 
-                q_values = q_network.forward(s_obses)
-                old_val = q_network.forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
-                loss = loss_fn(td_target, old_val)
+#                 q_values = q_network.forward(s_obses)
+#                 old_val = q_network.forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+#                 loss = loss_fn(td_target, old_val)
 
-                # Optimize the model for the critic
-                optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(list(q_network.parameters()), config_args.max_grad_norm)
-                optimizer.step()
+#                 # Optimize the model for the critic
+#                 optimizer.zero_grad()
+#                 loss.backward()
+#                 nn.utils.clip_grad_norm_(list(q_network.parameters()), config_args.max_grad_norm)
+#                 optimizer.step()
 
 
-                # Actor training
-                a, log_pi, action_probs = actor_network.to(device).get_action(s_obses)
+#                 # Actor training
+#                 a, log_pi, action_probs = actor_network.to(device).get_action(s_obses)
 
-                # Compute the loss for this agent's actor
-                # NOTE: Actor uses cross-entropy loss function where
-                # input is the policy dist and the target is the value function with one-hot encoding applied
-                # Q-values from "critic" encoded so that the highest state-action value maps to a probability of 1
-                q_values_one_hot = one_hot_q_values(q_values)
-                actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
-                # NOTE: the actor losses are only updated for the random agent here, not all agents so at this time step only the random agent
-                # has current values for loss, this should not matter for showing trends in the loss function through
-                actor_losses[random_agent] = actor_loss.item() 
+#                 # Compute the loss for this agent's actor
+#                 # NOTE: Actor uses cross-entropy loss function where
+#                 # input is the policy dist and the target is the value function with one-hot encoding applied
+#                 # Q-values from "critic" encoded so that the highest state-action value maps to a probability of 1
+#                 q_values_one_hot = one_hot_q_values(q_values)
+#                 actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
+#                 # NOTE: the actor losses are only updated for the random agent here, not all agents so at this time step only the random agent
+#                 # has current values for loss, this should not matter for showing trends in the loss function through
+#                 actor_losses[random_agent] = actor_loss.item() 
 
-                actor_optimizer.zero_grad()
-                actor_loss.backward()
-                nn.utils.clip_grad_norm_(list(actor_network.parameters()), config_args.max_grad_norm)
-                actor_optimizer.step()
+#                 actor_optimizer.zero_grad()
+#                 actor_loss.backward()
+#                 nn.utils.clip_grad_norm_(list(actor_network.parameters()), config_args.max_grad_norm)
+#                 actor_optimizer.step()
 
-                # Update the target network
-                if (global_step % config_args.target_network_frequency == 0):
-                    target_network.load_state_dict(q_network.state_dict())
+#                 # Update the target network
+#                 if (global_step % config_args.target_network_frequency == 0):
+#                     target_network.load_state_dict(q_network.state_dict())
 
                 
-                # Periodically log data to CSV
-                if (global_step % 1000 == 0):
+#                 # Periodically log data to CSV
+#                 if (global_step % 1000 == 0):
 
-                    # Evaluate the probability of the first agent selecting the first action from the evaluation state
-                    a, log_pi, action_probs = actor_network.get_action(eval_obses)
-                    first_agent_first_action_probs = (action_probs.squeeze())[0].item() # Cast from tensor object to float
+#                     # Evaluate the probability of the first agent selecting the first action from the evaluation state
+#                     a, log_pi, action_probs = actor_network.get_action(eval_obses)
+#                     first_agent_first_action_probs = (action_probs.squeeze())[0].item() # Cast from tensor object to float
 
-                    with open(f"{csv_save_dir}/FQI_actor_loss.csv", "a", newline="") as csvfile:
-                        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
-                        csv_writer.writerow({**actor_losses, **{'Pi(a|s) Sample' : first_agent_first_action_probs,
-                                                                    'global_step' : global_step}})
+#                     with open(f"{csv_save_dir}/FQI_actor_loss.csv", "a", newline="") as csvfile:
+#                         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
+#                         csv_writer.writerow({**actor_losses, **{'Pi(a|s) Sample' : first_agent_first_action_probs,
+#                                                                     'global_step' : global_step}})
 
-            else:
+#             else:
 
-                # No parameter sharing so each agent is trained individually
-                for agent in agents:
+#                 # No parameter sharing so each agent is trained individually
+#                 for agent in agents:
 
-                    # Sample data from the dataset
-                    s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
-                    # print(f"s_obses {s_obses}, s_actions {s_actions}, s_next_obses {s_next_obses}, s_g1s {s_g1s}, s_g2s {s_g2s}, s_dones {s_dones}")
-                    # Compute the target
-                    with torch.no_grad():
-                        # Calculate max_a Q(s',a)
-                        # NOTE: that the original FQI in the paper used min_a here but our constaint values are the negative version of theirs
-                        # so we need to take max here
-                        target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1).values
+#                     # Sample data from the dataset
+#                     s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
+#                     # print(f"s_obses {s_obses}, s_actions {s_actions}, s_next_obses {s_next_obses}, s_g1s {s_g1s}, s_g2s {s_g2s}, s_dones {s_dones}")
+#                     # Compute the target
+#                     with torch.no_grad():
+#                         # Calculate max_a Q(s',a)
+#                         # NOTE: that the original FQI in the paper used min_a here but our constaint values are the negative version of theirs
+#                         # so we need to take max here
+#                         target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1).values
                         
-                        # Calculate the full TD target 
-                        # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
-                        # learn the policy
-                        if (constraint == "average-speed-limit"):
-                            # Use the "g1" constraint
-                            td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+#                         # Calculate the full TD target 
+#                         # NOTE: that the target in this Fitted Q iteration implementation depends on the type of constraint we are using to 
+#                         # learn the policy
+#                         if (constraint == "average-speed-limit"):
+#                             # Use the "g1" constraint
+#                             td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
-                        elif (constraint == "queue"):
-                            # Use the "g2" constraint
-                            td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+#                         elif (constraint == "queue"):
+#                             # Use the "g2" constraint
+#                             td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
 
-                        elif (constraint == "weighted_sum"):
-                            # Use both g1 and g2 but weighted with lambda
-                            td_target = torch.Tensor(lambda_1 * s_g1s).to(device) + torch.Tensor(lambda_2 * s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
-                        else: 
-                            print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
-                            sys.exit(1)
+#                         elif (constraint == "weighted_sum"):
+#                             # Use both g1 and g2 but weighted with lambda
+#                             td_target = torch.Tensor(lambda_1 * s_g1s).to(device) + torch.Tensor(lambda_2 * s_g2s).to(device) + config_args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+#                         else: 
+#                             print(f"ERROR: Constraint function '{constraint}' not recognized, unable to train using Fitted Q Iteration")
+#                             sys.exit(1)
 
-                    q_values = q_network[agent].forward(s_obses)
-                    old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
-                    loss = loss_fn(td_target, old_val)
+#                     q_values = q_network[agent].forward(s_obses)
+#                     old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+#                     loss = loss_fn(td_target, old_val)
 
-                    # Optimize the model for the critic
-                    optimizer[agent].zero_grad()
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), config_args.max_grad_norm)
-                    optimizer[agent].step()
+#                     # Optimize the model for the critic
+#                     optimizer[agent].zero_grad()
+#                     loss.backward()
+#                     nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), config_args.max_grad_norm)
+#                     optimizer[agent].step()
 
 
-                    # Actor training
-                    a, log_pi, action_probs = actor_network[agent].to(device).get_action(s_obses)
+#                     # Actor training
+#                     a, log_pi, action_probs = actor_network[agent].to(device).get_action(s_obses)
 
-                    # Compute the loss for this agent's actor
-                    # NOTE: Actor uses cross-entropy loss function where
-                    # input is the policy dist and the target is the value function with one-hot encoding applied
-                    # Q-values from "critic" encoded so that the highest state-action value maps to a probability of 1
-                    q_values_one_hot = one_hot_q_values(q_values)
-                    actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
-                    actor_losses[agent] = actor_loss.item()
+#                     # Compute the loss for this agent's actor
+#                     # NOTE: Actor uses cross-entropy loss function where
+#                     # input is the policy dist and the target is the value function with one-hot encoding applied
+#                     # Q-values from "critic" encoded so that the highest state-action value maps to a probability of 1
+#                     q_values_one_hot = one_hot_q_values(q_values)
+#                     actor_loss = actor_loss_fn(action_probs, q_values_one_hot.to(device))
+#                     actor_losses[agent] = actor_loss.item()
 
-                    actor_optimizer[agent].zero_grad()
-                    actor_loss.backward()
-                    nn.utils.clip_grad_norm_(list(actor_network[agent].parameters()), config_args.max_grad_norm)
-                    actor_optimizer[agent].step()
+#                     actor_optimizer[agent].zero_grad()
+#                     actor_loss.backward()
+#                     nn.utils.clip_grad_norm_(list(actor_network[agent].parameters()), config_args.max_grad_norm)
+#                     actor_optimizer[agent].step()
 
-                    # Update the target network
-                    if global_step % config_args.target_network_frequency == 0:
-                        target_network[agent].load_state_dict(q_network[agent].state_dict())
+#                     # Update the target network
+#                     if global_step % config_args.target_network_frequency == 0:
+#                         target_network[agent].load_state_dict(q_network[agent].state_dict())
 
                     
-                # Periodically log data to CSV
-                if (global_step % 1000 == 0):
+#                 # Periodically log data to CSV
+#                 if (global_step % 1000 == 0):
 
-                    # Evaluate the probability of the first agent selecting the first action from the evaluation state
-                    a, log_pi, action_probs = actor_network[agents[0]].get_action(eval_obses)
-                    first_agent_first_action_probs = (action_probs.squeeze())[0].item() # Cast from tensor object to float
+#                     # Evaluate the probability of the first agent selecting the first action from the evaluation state
+#                     a, log_pi, action_probs = actor_network[agents[0]].get_action(eval_obses)
+#                     first_agent_first_action_probs = (action_probs.squeeze())[0].item() # Cast from tensor object to float
 
-                    with open(f"{csv_save_dir}/FQI_actor_loss.csv", "a", newline="") as csvfile:
-                        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
-                        csv_writer.writerow({**actor_losses, **{'Pi(a|s) Sample' : first_agent_first_action_probs,
-                                                                    'global_step' : global_step}})
+#                     with open(f"{csv_save_dir}/FQI_actor_loss.csv", "a", newline="") as csvfile:
+#                         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Pi(a|s) Sample', 'global_step'])
+#                         csv_writer.writerow({**actor_losses, **{'Pi(a|s) Sample' : first_agent_first_action_probs,
+#                                                                     'global_step' : global_step}})
 
-    stop_time = datetime.now()
-    print(" >> Fitted Q Iteration complete")
-    print(" >>> Total execution time: {}".format(stop_time-start_time))
+#     stop_time = datetime.now()
+#     print(" >> Fitted Q Iteration complete")
+#     print(" >>> Total execution time: {}".format(stop_time-start_time))
     
-    # If we're using parameter sharing, there is only a single network so to conform to the rest of the code, return a dictionary that maps
-    # each agent to it's policy network
-    if config_args.parameter_sharing_model:
-        actor_network = {agent: actor_network for agent in agents}
+#     # If we're using parameter sharing, there is only a single network so to conform to the rest of the code, return a dictionary that maps
+#     # each agent to it's policy network
+#     if config_args.parameter_sharing_model:
+#         actor_network = {agent: actor_network for agent in agents}
 
-    return actor_network
-
-
-def FittedQEvaluation(observation_spaces:dict,
-                     action_spaces:dict,
-                     agents:list,
-                     policy:dict,
-                     dataset:dict,
-                     csv_save_dir:str,
-                     csv_file_suffix:str,
-                     config_args,
-                     constraint:str="") -> dict:
-    """
-    Implementation of Fitted Off-Policy Evaluation with function approximation for offline evaluation
-    of a policy according to a provided constraint
-    (algorithm 3 from Le, et. al)
-
-    :param observation_spaces: Dictionary that maps an agent to the observation space dimensions
-    :param action_spaces: Dictionary that maps agent to its action space
-    :param agents: List of agent names
-    :param policy: Dictionary that maps an agent to its policy to be evaluated
-    :param dataset: Dictionary that maps each agent to its experience tuple
-    :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
-    :param csv_file_suffix: String to append to the name of the csv file to differentiate between which mean constraint value function is being evaluated
-    :param config_args: Configuration arguments used to set up the experiment
-    :param constraint: 'average-speed-limit' or 'queue', defines how the target should be determined while learning the value function
-    :returns A dictionary that maps each agent to its learned constraint value function
-    """
-
-    # TODO: implement
-    if config_args.global_obs:
-        print("ERROR: global observations not supported for FittedQEvaluation")
-        return {}
-
-    print(" >> Beginning Fitted Q Evaluation")
-    start_time = datetime.now()
+#     return actor_network
 
 
-    if config_args.parameter_sharing_model:
-        # Parameter sharing is used so there is only a single actor and critic network
-        print(f"  >>> Parameter sharing enabled")
-        eg_agent = agents[0]
-        onehot_keys = {agent: i for i, agent in enumerate(agents)}
-        num_agents = len(agents)
-        for agent in agents:
-            onehot = np.zeros(num_agents)
-            onehot[onehot_keys[agent]] = 1.0
+# def FittedQEvaluation(observation_spaces:dict,
+#                      action_spaces:dict,
+#                      agents:list,
+#                      policy:dict,
+#                      dataset:dict,
+#                      csv_save_dir:str,
+#                      csv_file_suffix:str,
+#                      config_args,
+#                      constraint:str="") -> dict:
+#     """
+#     Implementation of Fitted Off-Policy Evaluation with function approximation for offline evaluation
+#     of a policy according to a provided constraint
+#     (algorithm 3 from Le, et. al)
 
-        # TODO: change size of observation space if global observations are being used
-        observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
-        observation_space_shape = tuple(np.array([observation_space_shape]))   
+#     :param observation_spaces: Dictionary that maps an agent to the observation space dimensions
+#     :param action_spaces: Dictionary that maps agent to its action space
+#     :param agents: List of agent names
+#     :param policy: Dictionary that maps an agent to its policy to be evaluated
+#     :param dataset: Dictionary that maps each agent to its experience tuple
+#     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
+#     :param csv_file_suffix: String to append to the name of the csv file to differentiate between which mean constraint value function is being evaluated
+#     :param config_args: Configuration arguments used to set up the experiment
+#     :param constraint: 'average-speed-limit' or 'queue', defines how the target should be determined while learning the value function
+#     :returns A dictionary that maps each agent to its learned constraint value function
+#     """
+
+#     # TODO: implement
+#     if config_args.global_obs:
+#         print("ERROR: global observations not supported for FittedQEvaluation")
+#         return {}
+
+#     print(" >> Beginning Fitted Q Evaluation")
+#     start_time = datetime.now()
+
+
+#     if config_args.parameter_sharing_model:
+#         # Parameter sharing is used so there is only a single actor and critic network
+#         print(f"  >>> Parameter sharing enabled")
+#         eg_agent = agents[0]
+#         onehot_keys = {agent: i for i, agent in enumerate(agents)}
+#         num_agents = len(agents)
+#         for agent in agents:
+#             onehot = np.zeros(num_agents)
+#             onehot[onehot_keys[agent]] = 1.0
+
+#         # TODO: change size of observation space if global observations are being used
+#         observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
+#         observation_space_shape = tuple(np.array([observation_space_shape]))   
         
             
-        q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device) 
-        target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
-        target_network.load_state_dict(q_network.state_dict())    # Intialize the target network the same as the main network
-        optimizer = optim.Adam(q_network.parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
-        losses = {agent: None for agent in agents}         # Dictionary that maps each agent to the loss values for the critic network
+#         q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device) 
+#         target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
+#         target_network.load_state_dict(q_network.state_dict())    # Intialize the target network the same as the main network
+#         optimizer = optim.Adam(q_network.parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
+#         losses = {agent: None for agent in agents}         # Dictionary that maps each agent to the loss values for the critic network
 
 
-    else:
-        print(f"  >>> Parameter sharing NOT enabled")
+#     else:
+#         print(f"  >>> Parameter sharing NOT enabled")
 
-        q_network = {}      # Dictionary for storing q-networks (maps agent to a q-network)
-        target_network = {} # Dictionary for storing target networks (maps agent to a network)
-        optimizer = {}      # Dictionary for storing optimizers for each RL problem
-        actions = {}        # Dictionary that maps each agent to the action it selected
-        losses = {}         # Dictionary that maps each agent to the loss values for its critic network
+#         q_network = {}      # Dictionary for storing q-networks (maps agent to a q-network)
+#         target_network = {} # Dictionary for storing target networks (maps agent to a network)
+#         optimizer = {}      # Dictionary for storing optimizers for each RL problem
+#         actions = {}        # Dictionary that maps each agent to the action it selected
+#         losses = {}         # Dictionary that maps each agent to the loss values for its critic network
 
-        for agent in agents:
-            observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
-            q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-            target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-            target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
-            optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
-            actions[agent] = None
+#         for agent in agents:
+#             observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if config_args.global_obs else observation_spaces[agent].shape
+#             q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+#             target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+#             target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the main network
+#             optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=config_args.learning_rate) # All agents use the same optimizer for training
+#             actions[agent] = None
 
-    # Define loss function as MSE loss
-    loss_fn = nn.MSELoss()
+#     # Define loss function as MSE loss
+#     loss_fn = nn.MSELoss()
 
-    # Define a single experience sample that can be used to periodically evaluate the network to test for convergence
-    # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
-    eval_obses, eval_actions, eval_next_obses, eval_g1s, eval_g2s, eval_dones = dataset[agents[0]].sample(1)
+#     # Define a single experience sample that can be used to periodically evaluate the network to test for convergence
+#     # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
+#     eval_obses, eval_actions, eval_next_obses, eval_g1s, eval_g2s, eval_dones = dataset[agents[0]].sample(1)
 
-    # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
-    for global_step in range(config_args.total_timesteps):
+#     # TODO: this should be updated to be for k = 1:K (does not need to be the same as total_timesteps)
+#     for global_step in range(config_args.total_timesteps):
 
-        if (global_step % config_args.train_frequency == 0):  
+#         if (global_step % config_args.train_frequency == 0):  
 
 
-            if config_args.parameter_sharing_model:
-                # Agent is randomly selected to be used for calculating the Q values and targets
-                random_agent = random.choice(agents)
+#             if config_args.parameter_sharing_model:
+#                 # Agent is randomly selected to be used for calculating the Q values and targets
+#                 random_agent = random.choice(agents)
 
-                # Sample data from the dataset
-                # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
-                s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[random_agent].sample(config_args.batch_size)
+#                 # Sample data from the dataset
+#                 # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
+#                 s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[random_agent].sample(config_args.batch_size)
 
-                # Use the sampled next observations (x') to generate actions according to the provided policy
-                # NOTE this method of getting actions is identical to how it is performed in actor-critic
-                actions_for_agent, _, _ = policy[random_agent].get_action(s_obses)
+#                 # Use the sampled next observations (x') to generate actions according to the provided policy
+#                 # NOTE this method of getting actions is identical to how it is performed in actor-critic
+#                 actions_for_agent, _, _ = policy[random_agent].get_action(s_obses)
 
-                # Compute the target
-                # NOTE That this is the only thing different between FQE and FQI
-                with torch.no_grad():
+#                 # Compute the target
+#                 # NOTE That this is the only thing different between FQE and FQI
+#                 with torch.no_grad():
                     
-                    # Calculate Q(s',pi(s'))
-                    target = target_network.forward(s_next_obses).gather(1, torch.Tensor(actions_for_agent).view(-1,1).to(device)).squeeze()
+#                     # Calculate Q(s',pi(s'))
+#                     target = target_network.forward(s_next_obses).gather(1, torch.Tensor(actions_for_agent).view(-1,1).to(device)).squeeze()
                     
-                    # Calculate the full TD target 
-                    # NOTE that the target in this Fitted Q evaluation implementation depends on the type of constraint we are using to 
-                    # learn the policy
-                    if (constraint == "average-speed-limit"):
-                        # Use the "g1" constraint
-                        td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
+#                     # Calculate the full TD target 
+#                     # NOTE that the target in this Fitted Q evaluation implementation depends on the type of constraint we are using to 
+#                     # learn the policy
+#                     if (constraint == "average-speed-limit"):
+#                         # Use the "g1" constraint
+#                         td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
-                    elif (constraint == "queue"):
-                        # Use the "g2" constraint
-                        td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
+#                     elif (constraint == "queue"):
+#                         # Use the "g2" constraint
+#                         td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
-                    else: 
-                        print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Evaluation".format(constraint))
-                        sys.exit(1)
+#                     else: 
+#                         print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Evaluation".format(constraint))
+#                         sys.exit(1)
 
-                # Calculate "previous" value using actions from the experience dataset
-                old_val = q_network.forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+#                 # Calculate "previous" value using actions from the experience dataset
+#                 old_val = q_network.forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
 
-                loss = loss_fn(td_target, old_val)
-                losses[random_agent] = loss.item()
+#                 loss = loss_fn(td_target, old_val)
+#                 losses[random_agent] = loss.item()
 
-                # optimize the model
-                optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(list(q_network.parameters()), config_args.max_grad_norm)
-                optimizer.step()
+#                 # optimize the model
+#                 optimizer.zero_grad()
+#                 loss.backward()
+#                 nn.utils.clip_grad_norm_(list(q_network.parameters()), config_args.max_grad_norm)
+#                 optimizer.step()
 
-                # Update the target network
-                if (global_step % config_args.target_network_frequency == 0):
-                    target_network.load_state_dict(q_network.state_dict())
+#                 # Update the target network
+#                 if (global_step % config_args.target_network_frequency == 0):
+#                     target_network.load_state_dict(q_network.state_dict())
 
-                # Periodically log data to CSV
-                if (global_step % 1000 == 0):
+#                 # Periodically log data to CSV
+#                 if (global_step % 1000 == 0):
 
-                    # Evaluate the Q(s,a) of the first agent selecting the first action from the evaluation state
-                    eval_q_s_a = q_network.forward(eval_obses).squeeze()
-                    first_agent_first_action_value = eval_q_s_a[0].item()   # cast the tensor object to a float
+#                     # Evaluate the Q(s,a) of the first agent selecting the first action from the evaluation state
+#                     eval_q_s_a = q_network.forward(eval_obses).squeeze()
+#                     first_agent_first_action_value = eval_q_s_a[0].item()   # cast the tensor object to a float
 
-                    with open(f"{csv_save_dir}/FQE_loss_{csv_file_suffix}.csv", "a", newline="") as csvfile:
-                        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample', 'global_step'])
-                        csv_writer.writerow({**losses, **{'Q(s,a) Sample' : first_agent_first_action_value,
-                                                                    'global_step' : global_step}})
+#                     with open(f"{csv_save_dir}/FQE_loss_{csv_file_suffix}.csv", "a", newline="") as csvfile:
+#                         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample', 'global_step'])
+#                         csv_writer.writerow({**losses, **{'Q(s,a) Sample' : first_agent_first_action_value,
+#                                                                     'global_step' : global_step}})
 
-            else:
-                # Training for each agent
-                for agent in agents:
+#             else:
+#                 # Training for each agent
+#                 for agent in agents:
                 
                     
-                    # Sample data from the dataset
-                    s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
+#                     # Sample data from the dataset
+#                     s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[agent].sample(config_args.batch_size)
                     
-                    # Use the sampled next observations (x') to generate actions according to the provided policy
-                    # NOTE this method of getting actions is identical to how it is performed in actor-critic
-                    actions_for_agent, _, _ = policy[agent].get_action(s_obses)
+#                     # Use the sampled next observations (x') to generate actions according to the provided policy
+#                     # NOTE this method of getting actions is identical to how it is performed in actor-critic
+#                     actions_for_agent, _, _ = policy[agent].get_action(s_obses)
                     
-                    # Compute the target
-                    # NOTE That this is the only thing different between FQE and FQI
-                    with torch.no_grad():
+#                     # Compute the target
+#                     # NOTE That this is the only thing different between FQE and FQI
+#                     with torch.no_grad():
                         
-                        # Calculate Q(s',pi(s'))
-                        target = target_network[agent].forward(s_next_obses).gather(1, torch.Tensor(actions_for_agent).view(-1,1).to(device)).squeeze()
+#                         # Calculate Q(s',pi(s'))
+#                         target = target_network[agent].forward(s_next_obses).gather(1, torch.Tensor(actions_for_agent).view(-1,1).to(device)).squeeze()
                         
-                        # Calculate the full TD target 
-                        # NOTE that the target in this Fitted Q evaluation implementation depends on the type of constraint we are using to 
-                        # learn the policy
-                        if (constraint == "average-speed-limit"):
-                            # Use the "g1" constraint
-                            td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
+#                         # Calculate the full TD target 
+#                         # NOTE that the target in this Fitted Q evaluation implementation depends on the type of constraint we are using to 
+#                         # learn the policy
+#                         if (constraint == "average-speed-limit"):
+#                             # Use the "g1" constraint
+#                             td_target = torch.Tensor(s_g1s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
-                        elif (constraint == "queue"):
-                            # Use the "g2" constraint
-                            td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
+#                         elif (constraint == "queue"):
+#                             # Use the "g2" constraint
+#                             td_target = torch.Tensor(s_g2s).to(device) + config_args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
 
-                        else: 
-                            print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Evaluation".format(constraint))
-                            sys.exit(1)
+#                         else: 
+#                             print("ERROR: Constraint function '{}' not recognized, unable to train using Fitted Q Evaluation".format(constraint))
+#                             sys.exit(1)
 
-                    # Calculate "previous" value using actions from the experience dataset
-                    old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
+#                     # Calculate "previous" value using actions from the experience dataset
+#                     old_val = q_network[agent].forward(s_obses).gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
 
-                    loss = loss_fn(td_target, old_val)
-                    losses[agent] = loss.item()
+#                     loss = loss_fn(td_target, old_val)
+#                     losses[agent] = loss.item()
 
-                    # optimize the model
-                    optimizer[agent].zero_grad()
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), config_args.max_grad_norm)
-                    optimizer[agent].step()
+#                     # optimize the model
+#                     optimizer[agent].zero_grad()
+#                     loss.backward()
+#                     nn.utils.clip_grad_norm_(list(q_network[agent].parameters()), config_args.max_grad_norm)
+#                     optimizer[agent].step()
 
-                    # Update the target network
-                    if global_step % args.target_network_frequency == 0:
-                        target_network[agent].load_state_dict(q_network[agent].state_dict())
+#                     # Update the target network
+#                     if global_step % args.target_network_frequency == 0:
+#                         target_network[agent].load_state_dict(q_network[agent].state_dict())
 
 
-                # Periodically log data to CSV
-                if (global_step % 1000 == 0):
+#                 # Periodically log data to CSV
+#                 if (global_step % 1000 == 0):
 
-                    # Evaluate the Q(s,a) of the first agent selecting the first action from the evaluation state
-                    eval_q_s_a = q_network[agents[0]].forward(eval_obses).squeeze()
-                    first_agent_first_action_value = eval_q_s_a[0].item()   # cast the tensor object to a float
+#                     # Evaluate the Q(s,a) of the first agent selecting the first action from the evaluation state
+#                     eval_q_s_a = q_network[agents[0]].forward(eval_obses).squeeze()
+#                     first_agent_first_action_value = eval_q_s_a[0].item()   # cast the tensor object to a float
 
-                    with open(f"{csv_save_dir}/FQE_loss_{csv_file_suffix}.csv", "a", newline="") as csvfile:
-                        csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample', 'global_step'])
-                        csv_writer.writerow({**losses, **{'Q(s,a) Sample' : first_agent_first_action_value,
-                                                                    'global_step' : global_step}})
+#                     with open(f"{csv_save_dir}/FQE_loss_{csv_file_suffix}.csv", "a", newline="") as csvfile:
+#                         csv_writer = csv.DictWriter(csvfile, fieldnames=agents + ['Q(s,a) Sample', 'global_step'])
+#                         csv_writer.writerow({**losses, **{'Q(s,a) Sample' : first_agent_first_action_value,
+#                                                                     'global_step' : global_step}})
 
-    stop_time = datetime.now()
-    print(" >> Fitted Q Evaluation complete")
-    print(" >>> Total execution time: {}".format(stop_time-start_time))
+#     stop_time = datetime.now()
+#     print(" >> Fitted Q Evaluation complete")
+#     print(" >>> Total execution time: {}".format(stop_time-start_time))
 
-    # If we're using parameter sharing, there is only a single network so to conform to the rest of the code, return a dictionary that maps
-    # each agent to it's constraint network
-    if config_args.parameter_sharing_model:
-        q_network = {agent: q_network for agent in agents}
+#     # If we're using parameter sharing, there is only a single network so to conform to the rest of the code, return a dictionary that maps
+#     # each agent to it's constraint network
+#     if config_args.parameter_sharing_model:
+#         q_network = {agent: q_network for agent in agents}
 
-    return q_network
+#     return q_network
 
 
 def CalculateMeanPolicy(latest_learned_policy:dict,
@@ -1560,132 +1608,134 @@ def CalculateMeanConstraint(latest_learned_constraint:dict,
     return mean_constraint
 
 
-def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[dict, dict, dict]:
-    """
-    Perform a 1-episode rollout of a provided policy to evaluate the constraint functions g1 and g2.
-    This function assumes that the environment has been set up with the 'queue' reward function when evaluating the
-    g1 and g2 constraints.
+# def PerformRollout(env:sumo_rl.parallel_env, policy:dict, config_args)->tuple[dict, dict, dict]:
+#     """
+#     Perform a 1-episode rollout of a provided policy to evaluate the constraint functions g1 and g2.
+#     This function assumes that the environment has been set up with the 'queue' reward function when evaluating the
+#     g1 and g2 constraints.
 
-    NOTE: this is an "online" rollout because it assumes that all agents are using their current learned policy
+#     NOTE: this is an "online" rollout because it assumes that all agents are using their current learned policy
 
-    :param env: The environment to execute the policy in
-    :param policy: Dictionary that maps agents to "actor" models
-    :param config_args: Configuration arguments used to set up the experiment
-    :returns: Three dictionaries, the first dict maps agents to their accumulated reward for the episode,
-            the second dict maps agents to their accumulated g1 constraint for the episode, the third dict
-            maps agents to their accumulated g2 constraint for the episode
-    """
-    # TODO: update function to support global observations
+#     :param env: The environment to execute the policy in
+#     :param policy: Dictionary that maps agents to "actor" models
+#     :param config_args: Configuration arguments used to set up the experiment
+#     :returns: Three dictionaries, the first dict maps agents to their accumulated reward for the episode,
+#             the second dict maps agents to their accumulated g1 constraint for the episode, the third dict
+#             maps agents to their accumulated g2 constraint for the episode
+#     """
+#     # TODO: update function to support global observations
 
-    # Define the speed limit used to evaluate the g1 constraint
-    # (note this needs to match what is used in GenerateDataset)
-    SPEED_LIMIT = 7.0 
+#     # Define the speed limit used to evaluate the g1 constraint
+#     # (note this needs to match what is used in GenerateDataset)
+#     SPEED_LIMIT = 7.0 
 
-    agents = env.possible_agents
+#     agents = env.possible_agents
 
-    # This function assumes that the environment is set up with the 'queue' reward so if that's not the case 
-    # just remind the user
-    if (config_args.sumo_reward != 'queue'):
-        print(f"  > WARNING: Reward '{config_args.sumo_reward}' specified but being ignored\n" \
-              f"    > Online rollout being performed with 'queue' reward.") 
+#     # This function assumes that the environment is set up with the 'queue' reward so if that's not the case 
+#     # just remind the user
+#     if (config_args.sumo_reward != 'queue'):
+#         print(f"  > WARNING: Reward '{config_args.sumo_reward}' specified but being ignored\n" \
+#               f"    > Online rollout being performed with 'queue' reward.") 
 
-    # Define empty dictionary that maps agents to actions
-    actions = {agent: None for agent in agents}
+#     # Define empty dictionary that maps agents to actions
+#     actions = {agent: None for agent in agents}
 
-    # Dictionary that maps the each agent to its cumulative reward each episode
-    episode_rewards = {agent: 0.0 for agent in agents}
+#     # Dictionary that maps the each agent to its cumulative reward each episode
+#     episode_rewards = {agent: 0.0 for agent in agents}
 
-    # Maps each agent to its MAX SPEED OVERAGE for this step
-    episode_constraint_1 = {agent : 0.0 for agent in agents}
+#     # Maps each agent to its MAX SPEED OVERAGE for this step
+#     episode_constraint_1 = {agent : 0.0 for agent in agents}
 
-    # Maps each agent to the accumulated NUBMER OF CARS STOPPED for episode
-    episode_constraint_2 = {agent : 0.0 for agent in agents}
+#     # Maps each agent to the accumulated NUBMER OF CARS STOPPED for episode
+#     episode_constraint_2 = {agent : 0.0 for agent in agents}
 
-    # Initialize the env
-    obses, _ = env.reset()
+#     # Initialize the env
+#     obses, _ = env.reset()
 
-    if config_args.parameter_sharing_model:
-        # Apply one-hot encoding to the initial observations
-        onehot_keys = {agent: i for i, agent in enumerate(agents)}
+#     if config_args.parameter_sharing_model:
+#         # Apply one-hot encoding to the initial observations
+#         onehot_keys = {agent: i for i, agent in enumerate(agents)}
 
-        for agent in agents:
-            onehot = np.zeros(num_agents)
-            onehot[onehot_keys[agent]] = 1.0
-            obses[agent] = np.hstack([onehot, obses[agent]])
+#         for agent in agents:
+#             onehot = np.zeros(num_agents)
+#             onehot[onehot_keys[agent]] = 1.0
+#             obses[agent] = np.hstack([onehot, obses[agent]])
 
-    # Perform the rollout
-    for sumo_step in range(config_args.sumo_seconds):
-        # Populate the action dictionary
-        for agent in agents:
-            # Only use optimal actions according to the policy
-            action, _, _ = policy[agent].to(device).get_action(obses[agent])
-            actions[agent] = action.detach().cpu().numpy()
+#     # Perform the rollout
+#     for sumo_step in range(config_args.sumo_seconds):
+#         # Populate the action dictionary
+#         for agent in agents:
+#             # Only use optimal actions according to the policy
+#             action, _, _ = policy[agent].to(device).get_action(obses[agent])
+#             actions[agent] = action.detach().cpu().numpy()
 
-        # Apply all actions to the env
-        next_obses, rewards, dones, truncated, info = env.step(actions)
+#         # Apply all actions to the env
+#         next_obses, rewards, dones, truncated, info = env.step(actions)
 
-        if np.prod(list(dones.values())):
-            # DEBUGGING:
-            print(f"    > Last max speeds observed by each agent: ")
-            for agent in agents:
-                print(f"     > agent: {agent}  max speed: {obses[agent][-1]}")
+#         if np.prod(list(dones.values())):
+#             # # DEBUGGING:
+#             # print(f"    > Last max speeds observed by each agent: ")
+#             # for agent in agents:
+#             #     print(f"     > agent: {agent}  max speed: {obses[agent][-1]}")
             
-            break
+#             break
 
-        if config_args.parameter_sharing_model:
-            # Apply one-hot encoding to the observations
-            onehot_keys = {agent: i for i, agent in enumerate(agents)}
+#         if config_args.parameter_sharing_model:
+#             # Apply one-hot encoding to the observations
+#             onehot_keys = {agent: i for i, agent in enumerate(agents)}
 
-            for agent in agents:
-                onehot = np.zeros(num_agents)
-                onehot[onehot_keys[agent]] = 1.0
-                next_obses[agent] = np.hstack([onehot, next_obses[agent]])
+#             for agent in agents:
+#                 onehot = np.zeros(num_agents)
+#                 onehot[onehot_keys[agent]] = 1.0
+#                 next_obses[agent] = np.hstack([onehot, next_obses[agent]])
 
-        # Accumulate the total episode reward and max speeds
-        for agent in agents:
-            episode_rewards[agent] += rewards[agent]
-            avg_speed_observed_by_agent = next_obses[agent][-2]
-            episode_constraint_1[agent] += CalculateSpeedError(speed=avg_speed_observed_by_agent, 
-                                                                speed_limit=SPEED_LIMIT,
-                                                                lower_speed_limit=SPEED_LIMIT)
-            episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
+#         # Accumulate the total episode reward and max speeds
+#         for agent in agents:
+#             episode_rewards[agent] += rewards[agent]
+#             max_speed_observed_by_agent = next_obses[agent][-1]
+#             avg_speed_observed_by_agent = next_obses[agent][-2]
+#             episode_constraint_1[agent] += CalculateMaxSpeedPension(speed=max_speed_observed_by_agent)
+#             # episode_constraint_1[agent] += CalculateSpeedError(speed=avg_speed_observed_by_agent, 
+#             #                                                     speed_limit=SPEED_LIMIT,
+#             #                                                     lower_speed_limit=SPEED_LIMIT)
+#             episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
 
                 
-        obses = next_obses
+#         obses = next_obses
 
-    return episode_rewards, episode_constraint_1, episode_constraint_2
+#     return episode_rewards, episode_constraint_1, episode_constraint_2
 
 
-def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)->dict:
-    """
-    :param value_function: Dictionary that maps agents to the learned value function for a given constraint
-    :param policies: Dictionary that maps agents to the policy that should be used to select actions from the mini_dataset for evaluation
-    :param mini_dataset: A subset of the larger dataset that contains experience tuples that are evaluated in the rollout
-            using the provided dataset
-            NOTE: This function assumes the dataset has been sampled such that mini_dataset contains lists of of experience
-            tuples for each agent
-    :returns The cummulative return for all agents of the mini dataset according to the provided value functions normalized 
-            by the size of the mini dataset
-    """
+# def PerformOfflineRollout(value_function:dict, policies:dict, mini_dataset:dict)->dict:
+#     """
+#     :param value_function: Dictionary that maps agents to the learned value function for a given constraint
+#     :param policies: Dictionary that maps agents to the policy that should be used to select actions from the mini_dataset for evaluation
+#     :param mini_dataset: A subset of the larger dataset that contains experience tuples that are evaluated in the rollout
+#             using the provided dataset
+#             NOTE: This function assumes the dataset has been sampled such that mini_dataset contains lists of of experience
+#             tuples for each agent
+#     :returns The cummulative return for all agents of the mini dataset according to the provided value functions normalized 
+#             by the size of the mini dataset
+#     """
 
-    agents = list(value_function.keys())
-    cumulative_return = {agent:0.0 for agent in agents}
+#     agents = list(value_function.keys())
+#     cumulative_return = {agent:0.0 for agent in agents}
 
-    for agent in agents:
-        # NOTE: when using parameter sharing, the observations here should already have 
-        # one hot encoding applied
-        obses_array, _, _, _, _, _ = mini_dataset[agent]
+#     for agent in agents:
+#         # NOTE: when using parameter sharing, the observations here should already have 
+#         # one hot encoding applied
+#         obses_array, _, _, _, _, _ = mini_dataset[agent]
 
-        # Get the max_a Q(s,a) for the observation
-        actions_from_policy, _, _ = policies[agent].to(device).get_action(obses_array)
+#         # Get the max_a Q(s,a) for the observation
+#         actions_from_policy, _, _ = policies[agent].to(device).get_action(obses_array)
 
-        # Evaluate the actions that were selected by the policies from this observation
-        values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
+#         # Evaluate the actions that were selected by the policies from this observation
+#         values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
 
-        # Add up the max values of all states from the mini dataset
-        cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
+#         # Add up the max values of all states from the mini dataset
+#         cumulative_return[agent] = sum(values)/(len(mini_dataset[agent]))
 
-    return cumulative_return
+#     return cumulative_return
 
 
 def OnlineLambdaLearning(lambda_1_prev:float, 
@@ -1707,7 +1757,8 @@ def OnlineLambdaLearning(lambda_1_prev:float,
 
     # Lambda learning rate # TODO: config
     # n = 0.01
-    n = 0.001
+    n = 0.1
+    # n = 0.001
     # n = 0.00001
     # n = 1.0
 
@@ -1746,8 +1797,8 @@ def OnlineLambdaLearningByImprovementRate(lambda_1_prev:float,
     avg_cumulative_g2_returns = torch.sum(torch.tensor(list(g2_returns.values()))).detach().numpy() / num_agents
 
     # Lambda learning rate # TODO: config
-    # n = 0.1
-    n = 0.001
+    n = 0.1
+    # n = 0.001
     # n = 0.01
     # n = 0.00001
     # n = 1
@@ -1777,6 +1828,7 @@ if __name__ == "__main__":
     if not args.seed:
         args.seed = int(datetime.now())
 
+    # TODO: pass this in as a function arg instead of letting it be a global var
     device = torch.device('cuda' if torch.cuda.is_available() and args.cuda else 'cpu')
     print(f" > DEVICE: {device}")
 
@@ -1824,16 +1876,13 @@ if __name__ == "__main__":
     action_spaces = env.action_spaces
     observation_spaces = env.observation_spaces
 
-    # Initialize dicitonaries
-    episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
-
     print("\n=================== Environment Information ===================")
     print(" > agents: {}".format(agents))
     print(" > num_agents: {}".format(num_agents))
     print(" > action_spaces: {}".format(action_spaces))
     print(" > observation_spaces: {}".format(observation_spaces))
 
-    # Construct the Q-Network model. This is the agent that will be used to generate the dataset
+    # Construct the Q-Network model
     # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent
     # DQN model was used
     list_of_policies = []
@@ -1842,7 +1891,7 @@ if __name__ == "__main__":
     avg_speed_limit_model_policies = {}    
 
     if parameter_sharing_model:
-        # In this case, each agent will still have it's own network, they will just be copies of each other
+        # In this case, each agent will still have its own network, they will just be copies of each other
 
         # Define the shape of the observation space depending on if we're using a global observation or not
         # Regardless, we need to add an array of length num_agents to the observation to account for one hot encoding
@@ -1930,11 +1979,12 @@ if __name__ == "__main__":
         # TODO: add these arguments to config file
         dataset = GenerateDataset(env, 
                               list_of_policies, 
-                              exceess_speed_action_ratio=0.4,
+                              avg_speed_action_ratio=0.4,
                               queue_action_ratio=0.4, 
                               num_episodes=50,   
                               episode_steps=args.sumo_seconds,
-                              parameter_sharing_model=args.parameter_sharing_model)
+                              parameter_sharing_model=args.parameter_sharing_model,
+                              device=device)
         
         with open(f"{dataset_save_dir}/dataset.pkl", "wb") as f:
             pickle.dump(dataset, f)
@@ -1945,7 +1995,7 @@ if __name__ == "__main__":
         with open(f"{args.dataset_path}", "rb") as f:
             dataset = pickle.load(f)
 
-        print(f" > Dataset size: {len(dataset[eg_agent].buffer)} per agent")
+    print(f" > Dataset size: {len(dataset[eg_agent].buffer)} per agent")
 
     # Normalize the constraint values in the dataset
     constraint_ratio = 0.25  # TODO: config
@@ -1993,3 +2043,7 @@ if __name__ == "__main__":
                                                                 csv_save_dir,
                                                                 max_num_rounds=10)   # Lucky 7
 
+    print(f" > Summary of constraints applied to dataset")
+    print(f"   > g1_upper_bound: {g1_upper_bound}")
+    print(f"   > g1_lower_bound: {g1_lower_bound}")
+    print(f"   > constraint ratio: {constraint_ratio}")
