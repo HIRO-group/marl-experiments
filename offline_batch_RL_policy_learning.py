@@ -474,7 +474,6 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # Modify the observation space shape to include one-hot-encoding used for parameter sharing
         print(f"   > Parameter sharing enabled")
 
-        # onehot_keys = {agent: i for i, agent in enumerate(agents)}
         if config_args.global_obs:
             print(f"    > Global observations enabled")
             observation_space_shape = tuple((shape+1) * (num_agents) for shape in observation_spaces[eg_agent].shape)
@@ -637,10 +636,8 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
 
         print(f" > EVALUATING G2_pi IN OFFLINE ROLLOUT")
         g2_returns = PerformOfflineRollout(G2_pi, policies, rollout_mini_dataset)
-        # TODO: perform some kind of similar rollout for the dataset policies to compare?
 
-
-        # DEBUGGING:
+        # TODO: add these results to log files
         offline_g1_returns_threshold_policy = PerformOfflineRollout(G1_pi, dataset_policies[0], rollout_mini_dataset)
         offline_g2_returns_threshold_policy = PerformOfflineRollout(G2_pi, dataset_policies[0], rollout_mini_dataset)
         offline_g1_returns_queue_policy = PerformOfflineRollout(G1_pi, dataset_policies[1], rollout_mini_dataset)
