@@ -654,8 +654,11 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         # round X
         # Adjust lambda
         if (t == 1):
+            # On the first round, use the normal lambda update because we need >2 rounds in order to calculate the lambda 
+            # change rate
             lambda_1, lambda_2, R_1, R_2 = OnlineLambdaLearning(lambda_1, lambda_2, g1_returns, g2_returns)
         else:
+            # After the first round, use lambda change rate to update
             lambda_1, lambda_2, R_1, R_2 = OnlineLambdaLearningByImprovementRate(lambda_1, lambda_2, g1_returns, g2_returns, R_1, R_2)
 
 
@@ -867,7 +870,7 @@ def FittedQIteration(observation_spaces:dict,
                 # Sample data from the dataset
                 # NOTE: Observations sampled from the dataset should already have one-hot encoding applied to them for parameter sharing
                 s_obses, s_actions, s_next_obses, s_g1s, s_g2s, s_dones = dataset[random_agent].sample(config_args.batch_size)
-                # print(f"s_obses {s_obses}, s_actions {s_actions}, s_next_obses {s_next_obses}, s_g1s {s_g1s}, s_g2s {s_g2s}, s_dones {s_dones}")
+
                 # Compute the target
                 with torch.no_grad():
                     # Calculate max_a Q(s',a)
