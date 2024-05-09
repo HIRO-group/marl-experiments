@@ -26,9 +26,13 @@ import sys
 
 from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
 
 # Config Parser
 from MARLConfigParser import MARLConfigParser
+from actor_critic import Actor
+from calculate_speed_control import CalculateSpeedError
+
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -60,37 +64,37 @@ else:
 #         x = self.fc3(x)
 #         return x
 
-class Actor(nn.Module):
-    def __init__(self, observation_space_shape, action_space_dim):
-        super(Actor, self).__init__()
-        hidden_size = 64
-        self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, action_space_dim)
+# class Actor(nn.Module):
+#     def __init__(self, observation_space_shape, action_space_dim):
+#         super(Actor, self).__init__()
+#         hidden_size = 64
+#         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
+#         self.fc2 = nn.Linear(hidden_size, hidden_size)
+#         self.fc3 = nn.Linear(hidden_size, action_space_dim)
 
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        # print(">> SHAPE OF X: {}".format(x.shape))
-        logits = self.fc3(x)
-        # print(">> SHAPE OF LOGITS: {}".format(logits.shape))
-        return logits
+#     def forward(self, x):
+#         x = F.relu(self.fc1(x))
+#         x = F.relu(self.fc2(x))
+#         # print(">> SHAPE OF X: {}".format(x.shape))
+#         logits = self.fc3(x)
+#         # print(">> SHAPE OF LOGITS: {}".format(logits.shape))
+#         return logits
     
-    def get_action(self, x):
-        x = torch.Tensor(x).to(device)
-        logits = self.forward(x)
-        # Note that this is equivalent to what used to be called multinomial 
-        # policy_dist.probs here will produce the same thing as softmax(logits)
-        policy_dist = Categorical(logits=logits)
-        # policy_dist = F.softmax(logits)
-        # print(" >>> Categorical: {}".format(policy_dist.probs))
-        # print(" >>> softmax: {}".format(F.softmax(logits)))
-        action = policy_dist.sample()
-        # Action probabilities for calculating the adapted loss
-        action_probs = policy_dist.probs
-        log_prob = F.log_softmax(logits, dim=-1)
-        # return action, torch.transpose(log_prob, 0, 1), action_probs
-        return action, log_prob, action_probs
+#     def get_action(self, x):
+#         x = torch.Tensor(x).to(device)
+#         logits = self.forward(x)
+#         # Note that this is equivalent to what used to be called multinomial 
+#         # policy_dist.probs here will produce the same thing as softmax(logits)
+#         policy_dist = Categorical(logits=logits)
+#         # policy_dist = F.softmax(logits)
+#         # print(" >>> Categorical: {}".format(policy_dist.probs))
+#         # print(" >>> softmax: {}".format(F.softmax(logits)))
+#         action = policy_dist.sample()
+#         # Action probabilities for calculating the adapted loss
+#         action_probs = policy_dist.probs
+#         log_prob = F.log_softmax(logits, dim=-1)
+#         # return action, torch.transpose(log_prob, 0, 1), action_probs
+#         return action, log_prob, action_probs
 
 
 if __name__ == "__main__":
@@ -99,6 +103,9 @@ if __name__ == "__main__":
     parser = MARLConfigParser()
     args = parser.parse_args()
     
+    # TODO: config
+    SPEED_LIMIT = 7.0   # The limit used to evaluate avg speed error (the g1 metric)
+
     if not args.seed:
         args.seed = int(datetime.now()) 
     
@@ -111,6 +118,7 @@ if __name__ == "__main__":
     nn_dir = f"{nn_directory}"                              # Name of directory containing the stored nn from training
 
     print(" > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
+    print(" > Loading NN policy from training step {} from directory: {}".format(analysis_steps, nn_directory))
 
     # Create the env
     # Sumo must be created using the sumo-rl module
@@ -128,6 +136,21 @@ if __name__ == "__main__":
                                 reward_fn=MaxSpeedRewardFunction,
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)
+        
+    elif (args.sumo_reward == "custom-average-speed-limit"):
+        # Use the custom "avg speed limit" reward function
+        print ( " > Evaluating model using CUSTOM AVERAGE SPEED LIMIT reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=True,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                add_system_info=True,       # Default is True
+                                add_per_agent_info=True,    # Default is True                                
+                                reward_fn=AverageSpeedLimitReward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False) 
     else:
         print ( " > Evaluating model using standard reward: {}".format(args.sumo_reward))
         # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
@@ -148,8 +171,10 @@ if __name__ == "__main__":
     observation_spaces = env.observation_spaces
     onehot_keys = {agent: i for i, agent in enumerate(agents)}
     
-    episode_rewards = {agent: 0 for agent in agents}    # Dictionary that maps the each agent to its cumulative reward each episode
-
+    episode_rewards = {agent: 0 for agent in agents}        # Dictionary that maps the each agent to its cumulative reward each episode
+    episode_constraint_1 = {agent: 0 for agent in agents}   # Dictionary that maps each agent to its accumulated g1 metric
+    episode_constraint_2 = {agent: 0 for agent in agents}   # Dictionary that maps each agent to its accumulated g2 metric
+    
     print("\n=================== Environment Information ===================")
     print(" > agents: {}".format(agents))
     print(" > num_agents: {}".format(num_agents))
@@ -170,9 +195,10 @@ if __name__ == "__main__":
             observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
             observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
  
-        q_network = Actor(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
+        q_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
         
         # Load the Q-network file
+        # TODO Update this to support loading policies from batch offline algo
         nn_file = "{}/{}.pt".format(nn_dir, analysis_steps)
         q_network.load_state_dict(torch.load(nn_file))
 
@@ -233,12 +259,31 @@ if __name__ == "__main__":
             # # # else:
             # # #     logits = q_network[agent].forward(obses[agent].reshape((1,)+obses[agent].shape))
             # # # actions[agent] = torch.argmax(logits, dim=1).tolist()[0]
+            # Actor choses the actions
+            if args.parameter_sharing_model:
+                action, _, _ = q_network.get_action(obses[agent])
+            else:
+                action, _, _ = q_network[agent].get_action(obses[agent])
 
-            action, _, _ = q_network[agent].get_action(obses[agent])
             actions[agent] = action.detach().cpu().numpy()
 
         # Apply all actions to the env
         next_obses, rewards, dones, truncated, info = env.step(actions)
+
+
+        # If the simulation is done, print the episode reward and close the env
+        if np.prod(list(dones.values())):
+            system_episode_reward = sum(list(episode_rewards.values()))                         # Accumulated reward of all agents
+            
+            system_accumulated_g1 = sum(list(episode_constraint_1.values()))
+            system_accumulated_g2 = sum(list(episode_constraint_2.values()))
+
+            print(f" > Rollout complete after {sumo_step} steps")
+            print(f"    > TOTAL EPISODE REWARD: {system_episode_reward} using reward: {args.sumo_reward}")
+            print(f"    > TOTAL EPISODE g1: {system_accumulated_g1} using speed limit: {SPEED_LIMIT}")
+            print(f"    > TOTAL EPISODE g2: {system_accumulated_g2}")
+
+            break
 
         # If the parameter sharing model was used, we have to add one hot encoding to the observations
         if parameter_sharing_model:
@@ -254,19 +299,23 @@ if __name__ == "__main__":
                     onehot = np.zeros(num_agents)
                     onehot[onehot_keys[agent]] = 1.0
                     next_obses[agent] = np.hstack([onehot, next_obses[agent]])
-        
-        # Accumulate the total episode reward
+
+        # Accumulate the total episode reward and g1/g2 metrics
         for agent in agents:
             episode_rewards[agent] += rewards[agent]
+            info = env.unwrapped.env._compute_info()                    # The wrapper class needs to be unwrapped for some reason in order to properly access info                
+            agent_cars_stopped = info[f'{agent}_stopped']               # Get the per-agent number of stopped cars from the info dictionary
+            agent_avg_speed = next_obses[agent][-2]                     # Average (true average) speed has been added to observation as second to last element
+
+            # g1 metric
+            episode_constraint_1[agent] += CalculateSpeedError(speed=agent_avg_speed, 
+                                                            speed_limit=SPEED_LIMIT,
+                                                            lower_speed_limit=SPEED_LIMIT)
+            
+            # g2 metric
+            episode_constraint_2[agent] += agent_cars_stopped
 
         obses = next_obses
 
-        # If the simulation is done, print the episode reward and close the env
-        if np.prod(list(dones.values())):
-            system_episode_reward = sum(list(episode_rewards.values())) # Accumulated reward of all agents
-
-            print(" >> TOTAL EPISODE REWARD: {}".format(system_episode_reward))
-
-            break
     
     env.close()

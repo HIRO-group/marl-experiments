@@ -7,10 +7,12 @@ Description:
 """
 
 from sumo_rl import TrafficSignal
+from calculate_speed_control import CalculateMaxSpeedPension
+import numpy as np
 
 def MaxSpeedRewardFunction(ts:TrafficSignal):
         """
-        Return the "pension" (i.e. difference) between the max observered speed of all vehicles at the intersection and a threshold 
+        Return the "pension" (i.e. sqrt of difference) between the max observered speed of all vehicles at the intersection and a threshold 
         If there are no vehicles in the intersection, returns 0.0
         """
         
@@ -25,26 +27,27 @@ def MaxSpeedRewardFunction(ts:TrafficSignal):
     
         # SPEED_THRESHOLD = 20.0
 
+        # LOWER_SPEED_THRESHOLD = 1.0
+        # LOWER_SPEED_THRESHOLD = 0.01
+        LOWER_SPEED_THRESHOLD = 1.0
+        # LOWER_SPEED_THRESHOLD = 0.0
+        
         max_speed = 0.0
 
         # Get all vehicles at the intersection
         vehs = ts._get_veh_list()
         if len(vehs) == 0:
-            max_speed = 0.0
+            pension = 0.0
 
-        # Find the max speed of all vehicles in the intersection            
+        # Find the max speed of all vehicles in the intersection
         for v in vehs:
             speed = ts.sumo.vehicle.getSpeed(v)
-            if speed > max_speed:
+            if (speed > max_speed):
                 max_speed = speed
-        
-        pension = max_speed - SPEED_THRESHOLD
-        
-        if pension > 0.0:
-            # If the max speed is greater than then threshold, return the negative 
-            # of the pension (i.e. difference)
-            return (-1.0 * pension)
-        
-        else:
-            # If the max speed is less than the threshold, just return 0
-            return 0.0
+
+        # Calculate the negative sqrt of the max speed from the allowable threshold
+        pension = CalculateMaxSpeedPension(speed=max_speed,
+                                           speed_limit=SPEED_THRESHOLD,
+                                           lower_speed_limit=LOWER_SPEED_THRESHOLD)
+       
+        return pension
