@@ -62,6 +62,8 @@ def GenerateDataset(env,
     :returns a dictionary that maps each agent to 
     """
     print(f"  > Generating dataset with {num_episodes} episodes of {episode_steps} steps")
+    print(f"    > Optimal 'queue' action ratio: {queue_action_ratio}")
+    print(f"    > Optimal 'avg speed limit' action ratio: {avg_speed_action_ratio}")
     start_time = datetime.now()
 
     DATASET_SIZE = num_episodes*episode_steps

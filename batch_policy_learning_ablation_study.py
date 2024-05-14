@@ -37,6 +37,9 @@ def AblationStudy(env:sumo_rl.parallel_env,
                 config_args,
                 nn_save_dir:str,
                 csv_save_dir:str,
+                use_true_value_functions:bool=False,
+                true_G1:dict=None,
+                true_G2:dict=None,
                 device:torch.device='cpu') -> tuple[dict, dict, list, list]:
 
     """
@@ -49,7 +52,7 @@ def AblationStudy(env:sumo_rl.parallel_env,
     :param dataset: Dictionary that maps each agent to its experience tuple
     :param dataset_policies: List of policies that were used to generate the dataset for this experiment (used for online evaluation)
     :param config_args: Configuration arguments used to set up the experiment
-    :param nn_save_dir: Directory in which to save the models each round
+    :param nn_save_dir: Directory in which to save the models each round    # TODO: start saving FQE output
     :pram csv_save_dir: Directory in which to save the csv file
     :param device: Torch device with which to do the reinforcement learning
     """
@@ -98,64 +101,86 @@ def AblationStudy(env:sumo_rl.parallel_env,
         print(f"   > Generating mini dataset of size: {sample_size}")
         rollout_mini_dataset[agent] = dataset[agent].sample(sample_size)
 
+    if (use_true_value_functions):
 
-    # Learn G1 value function according to speed threshold policy
-    print(f"   > Learning G1_pi using 'speed threshold' policy (G1_threshold_policy)")
-    G1_threshold_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
+        # We don't need to use FQE to learn the constraint value frunctions if they were provided,
+        print(f" > Using provided 'true' G1 and G2 value functions")
+
+        if (true_G1 is None) or (true_G2 is None):
+            print(f"   > ERROR: Please make sure provided G1 and G2 value functions are not 'None'")
+            sys.exit(1)
+
+        # The provided "true" G1 and G2 value functions should be used regardless of the policy that 
+        # is being evaluated
+        G1_threshold_policy = true_G1
+        G1_queue_policy = true_G1
+        G2_threshold_policy = true_G2
+        G2_queue_policy = true_G2
+        
+
+    else:
+
+        # The G1 and G2 value functions need to be learned. There are 2 versions of each function to learn (one from
+        # each policy)
+        print(f" > True value functions not provided, using FQE to learn them")
+
+        # Learn G1 value function according to speed threshold policy
+        print(f"   > Learning G1_pi using 'speed threshold' policy (G1_threshold_policy)")
+        G1_threshold_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
+                                                action_spaces=action_spaces, 
+                                                agents=agents,
+                                                policies=dataset_policies[0],    # Assumes order was [threshold, queue]
+                                                dataset=dataset,
+                                                csv_save_dir=csv_save_dir,
+                                                csv_file_suffix='g1_threshold',    
+                                                config_args=config_args, 
+                                                constraint="average-speed-limit")
+
+        # Learn G2 value function according to speed threshold policy
+        print(f"   > Learning G2_pi using 'speed threshold' policy (G2_threshold_policy)")    
+        G2_threshold_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
+                                                action_spaces=action_spaces, 
+                                                agents=agents,
+                                                policies=dataset_policies[0],    # Assumes order was [threshold, queue]
+                                                dataset=dataset,
+                                                csv_save_dir=csv_save_dir,
+                                                csv_file_suffix='g2_threshold',    
+                                                config_args=config_args, 
+                                                constraint="queue")
+        
+        # Learn G1 value function according to queue policy
+        print(f"   > Learning G1_pi using 'queue' policy (G1_queue_policy)")
+        G1_queue_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
                                             action_spaces=action_spaces, 
                                             agents=agents,
-                                            policies=dataset_policies[0],    # Assumes order was [threshold, queue]
+                                            policies=dataset_policies[1],    # Assumes order was [threshold, queue]
                                             dataset=dataset,
                                             csv_save_dir=csv_save_dir,
-                                            csv_file_suffix='g1_threshold',    
+                                            csv_file_suffix='g1_queue',    
                                             config_args=config_args, 
                                             constraint="average-speed-limit")
-
-    # Learn G2 value function according to speed threshold policy
-    print(f"   > Learning G2_pi using 'speed threshold' policy (G2_threshold_policy)")    
-    G2_threshold_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
+        
+        # Learn G2 value function according to queue policy
+        print(f"   > Learning G2_pi using 'queue' policy (G2_queue_policy)")
+        G2_queue_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
                                             action_spaces=action_spaces, 
                                             agents=agents,
-                                            policies=dataset_policies[0],    # Assumes order was [threshold, queue]
+                                            policies=dataset_policies[1],    # Assumes order was [threshold, queue]
                                             dataset=dataset,
                                             csv_save_dir=csv_save_dir,
-                                            csv_file_suffix='g2_threshold',    
+                                            csv_file_suffix='g2_queue',    
                                             config_args=config_args, 
                                             constraint="queue")
     
-    # Learn G1 value function according to queue policy
-    print(f"   > Learning G1_pi using 'queue' policy (G1_queue_policy)")
-    G1_queue_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
-                                        action_spaces=action_spaces, 
-                                        agents=agents,
-                                        policies=dataset_policies[1],    # Assumes order was [threshold, queue]
-                                        dataset=dataset,
-                                        csv_save_dir=csv_save_dir,
-                                        csv_file_suffix='g1_queue',    
-                                        config_args=config_args, 
-                                        constraint="average-speed-limit")
-    
-    # Learn G2 value function according to queue policy
-    print(f"   > Learning G2_pi using 'queue' policy (G2_queue_policy)")
-    G2_queue_policy = FittedQEvaluation(observation_spaces=observation_spaces, 
-                                        action_spaces=action_spaces, 
-                                        agents=agents,
-                                        policies=dataset_policies[1],    # Assumes order was [threshold, queue]
-                                        dataset=dataset,
-                                        csv_save_dir=csv_save_dir,
-                                        csv_file_suffix='g2_queue',    
-                                        config_args=config_args, 
-                                        constraint="queue")
-    
     # Perform an offline rollout using G1_threshold_policy and speed threshold policy
-    print(f"   > Evaluating G1_threshold_policy in offline rollout using 'speed threshold' policy")
+    print(f"   > Evaluating G1_threshold_policy in offline rollout using 'avg speed limit 7' policy")
     offline_g1_returns_threshold_policy = OfflineRollout(value_function=G1_threshold_policy, 
                                                         policies=dataset_policies[0], 
                                                         mini_dataset=rollout_mini_dataset,  # TODO: Update with dataset that only has threshold observations
                                                         device=device)
 
     # Perform an offline rollout using G2_speed_threshold and speed threshold policy
-    print(f"   > Evaluating G2_threshold_policy in offline rollout using 'speed threshold' policy")
+    print(f"   > Evaluating G2_threshold_policy in offline rollout using 'avg speed limit 7' policy")
     offline_g2_returns_threshold_policy = OfflineRollout(value_function=G2_threshold_policy, 
                                                         policies=dataset_policies[0], 
                                                         mini_dataset=rollout_mini_dataset,  # TODO: Update with dataset that only has threshold observations
@@ -364,6 +389,36 @@ if __name__ == "__main__":
             queue_model_policies[agent] = queue_model_policy
 
 
+        if (args.use_true_value_functions == True):
+            
+            # Use the "critic" networks from training as the true constraint functions
+            true_G1_networks = {}
+            true_G2_networks = {}
+
+            true_G1_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
+            true_G2_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
+
+            # Name of directory containing the stored critic networks from training
+            nn_true_g1_dir = f"{args.nn_true_g1_dir}"   
+            nn_true_g2_dir = f"{args.nn_true_g2_dir}"   
+
+            nn_true_g1_file = "{}/{}.pt".format(nn_true_g1_dir, analysis_steps)
+            print(" > Loading NN from file: {} for 'true' G1 constraint value function".format(nn_true_g1_file))
+
+            nn_true_g2_file = "{}/{}.pt".format(nn_true_g2_dir, analysis_steps)
+            print(" > Loading NN from file: {} for 'true' G2 constraint value function".format(nn_true_g2_file))
+
+            true_G1_network.load_state_dict(torch.load(nn_true_g1_file))
+            true_G2_network.load_state_dict(torch.load(nn_true_g2_file))
+
+            # Even though all agents use the same network in parameter sharing, 
+            # we need to conform to the rest of the code set up so create a dictionary that maps 
+            # each agent to its network
+            for agent in agents: 
+                true_G1_networks[agent] = true_G1_network
+                true_G2_networks[agent] = true_G2_network
+
+
     # Else the agents were trained using normal independent DQN so each agent gets its own Q-network model
     else: 
         
@@ -382,6 +437,30 @@ if __name__ == "__main__":
             nn_avg_speed_limit_file = "{}/{}-{}.pt".format(nn_avg_speed_limit_dir, analysis_steps, agent)
             avg_speed_limit_model_policies[agent].load_state_dict(torch.load(nn_avg_speed_limit_file))
             print(" > Loading NN from file: {} for 'average speed limit' policy".format(nn_avg_speed_limit_file))
+
+        if (args.use_true_value_functions == True):
+            
+            # Use the "critic" networks from training as the true constraint functions
+            true_G1_networks = {}
+            true_G2_networks = {}
+
+            # Name of directory containing the stored critic networks from training
+            nn_true_g1_dir = f"{args.nn_true_g1_dir}"   
+            nn_true_g2_dir = f"{args.nn_true_g2_dir}"   
+
+            for agent in agents:
+
+                true_G1_networks[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+                true_G2_networks[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+
+                nn_true_g1_file = "{}/{}-{}.pt".format(nn_true_g1_dir, analysis_steps, agent)
+                print(" > Loading NN from file: {} for 'true' G1 constraint value function".format(nn_true_g1_file))
+
+                nn_true_g2_file = "{}/{}.pt".format(nn_true_g2_dir, analysis_steps)
+                print(" > Loading NN from file: {} for 'true' G2 constraint value function".format(nn_true_g2_file))
+
+                true_G1_networks[agent].load_state_dict(torch.load(nn_true_g1_file))
+                true_G2_networks[agent].load_state_dict(torch.load(nn_true_g2_file))
 
     # List of policies is [avg_speed_limit, queue] - the order is imporant
     list_of_policies.append(avg_speed_limit_model_policies)
@@ -406,7 +485,8 @@ if __name__ == "__main__":
         Generate an un-normalized dataset (or load one)
     """
     if (args.dataset_path == ""):
-        # No dataset provided so need to generate one
+        # If no dataset was provided and we're not using the true value functions, generate a dataset so we can
+        # learn the value functions
 
         # Path to save the dataset
         dataset_save_dir = f"{save_dir}/dataset"
@@ -415,13 +495,13 @@ if __name__ == "__main__":
         # We need to generate the dataset
         # TODO: add these arguments to config file
         dataset = GenerateDataset(env, 
-                              list_of_policies, 
-                              avg_speed_action_ratio=0.4,
-                              queue_action_ratio=0.4, 
-                              num_episodes=50,   
-                              episode_steps=args.sumo_seconds,
-                              parameter_sharing_model=args.parameter_sharing_model,
-                              device=device)
+                            list_of_policies, 
+                            avg_speed_action_ratio=1.0,
+                            queue_action_ratio=0.0,
+                            num_episodes=50,
+                            episode_steps=args.sumo_seconds,
+                            parameter_sharing_model=args.parameter_sharing_model,
+                            device=device)
         
         with open(f"{dataset_save_dir}/dataset.pkl", "wb") as f:
             pickle.dump(dataset, f)
@@ -444,6 +524,9 @@ if __name__ == "__main__":
                 config_args=args,
                 nn_save_dir='', # TODO: add logging for the learned FQE value functions
                 csv_save_dir=csv_save_dir,
+                use_true_value_functions=args.use_true_value_functions,
+                true_G1=true_G1_networks,
+                true_G2=true_G2_networks,                
                 device=device)
     
     # All done

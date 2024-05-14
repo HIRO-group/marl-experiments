@@ -30,7 +30,7 @@ def FittedQEvaluation(observation_spaces:dict,
     :param action_spaces: Dictionary that maps agent to its action space
     :param agents: List of agent names
     :param policies: Dictionary that maps an agent to its policy to be evaluated
-    :param dataset: Dictionary that maps each agent to its experience tuple
+    :param dataset: Dictionary that maps each agent to its dataset of experience tuples
     :param csv_save_dir: Path to the directory being used to store CSV files for this experiment
     :param csv_file_suffix: String to append to the name of the csv file to differentiate between which mean constraint value function is being evaluated
     :param config_args: Configuration arguments used to set up the experiment
