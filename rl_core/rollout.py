@@ -23,13 +23,19 @@ def OfflineRollout(value_function:dict, policies:dict, mini_dataset:dict, device
         
         # NOTE: when using parameter sharing, the observations here should already have 
         # one hot encoding applied
-        obses_array, _, _, _, _, _ = mini_dataset[agent]
+        # if (agent == '1'): print(f"     >>> mini_dataset: {mini_dataset[agent]}\n")
+        obses_array, actions_array, next_obses_array, _, _, _ = mini_dataset[agent] # TODO: should I use obses or next_obses??
+        # if (agent == '1'): print(f"       >>> obses_array: {obses_array}\n")
 
         # Get the max_a Q(s,a) for the observation
-        actions_from_policy, _, _ = policies[agent].to(device).get_action(obses_array)
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!TODO: POLICY IS NOT ALWAYS PRODUCING THE OPTIMAL ACITON!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        actions_from_policy, _, _ = policies[agent].to(device).get_action(obses_array)  
+        # if (agent == '1'): print(f"     >>> actions_from_policy: {actions_from_policy}\n")
 
         # Evaluate the actions that were selected by the policies from this observation
+        # if (agent == '1'): print(f"     >>> values (BEFORE GATHER): {value_function[agent].forward(obses_array).to(device)}\n")
         values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
+        # if (agent == '1'): print(f"     >>> values (AFTER GATHER): {values}\n")
 
         # Add up the values of all states from the mini dataset and normalize it by the size of the dataset
         print(f"     > Normalizing offline rollout return by size of mini dataset: {len(obses_array)}")

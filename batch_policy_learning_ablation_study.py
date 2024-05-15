@@ -345,13 +345,19 @@ if __name__ == "__main__":
     print(" > action_spaces: {}".format(action_spaces))
     print(" > observation_spaces: {}".format(observation_spaces))
 
-    # Construct the Q-Network model
-    # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent
-    # DQN model was used
+    # List of policies that will be used for dataset generation and evaluation in the ablation study
     list_of_policies = []
+
+    # Use one of the agents to get the shape of things for parameter sharing
     eg_agent = agents[0]
-    queue_model_policies = {}  # Dictionary for storing q-networks (maps agent to a q-network)
+
+    # Dictionary for storing q-networks (maps agent to a q-network)
+    queue_model_policies = {}  
     avg_speed_limit_model_policies = {}    
+
+    # Dictionaries that map each agent to it's 'true' constraint function 
+    true_G1_networks = {}
+    true_G2_networks = {}
 
     print("  > Parameter Sharing Enabled: {}".format(parameter_sharing_model))
 
@@ -425,8 +431,8 @@ if __name__ == "__main__":
         # Load the Q-Network NN model for each agent from the specified anaylisis checkpoint step from training
         for agent in agents:
             observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
-            queue_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n)
-            avg_speed_limit_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n)
+            queue_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
+            avg_speed_limit_model_policies[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
 
             # Queue model policies
             nn_queue_file = "{}/{}-{}.pt".format(nn_queue_dir, analysis_steps, agent)
@@ -440,10 +446,6 @@ if __name__ == "__main__":
 
         if (args.use_true_value_functions == True):
             
-            # Use the "critic" networks from training as the true constraint functions
-            true_G1_networks = {}
-            true_G2_networks = {}
-
             # Name of directory containing the stored critic networks from training
             nn_true_g1_dir = f"{args.nn_true_g1_dir}"   
             nn_true_g2_dir = f"{args.nn_true_g2_dir}"   
@@ -461,6 +463,7 @@ if __name__ == "__main__":
 
                 true_G1_networks[agent].load_state_dict(torch.load(nn_true_g1_file))
                 true_G2_networks[agent].load_state_dict(torch.load(nn_true_g2_file))
+
 
     # List of policies is [avg_speed_limit, queue] - the order is imporant
     list_of_policies.append(avg_speed_limit_model_policies)
