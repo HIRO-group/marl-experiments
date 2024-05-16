@@ -499,8 +499,8 @@ if __name__ == "__main__":
         # TODO: add these arguments to config file
         dataset = GenerateDataset(env, 
                             list_of_policies, 
-                            avg_speed_action_ratio=1.0,
-                            queue_action_ratio=0.0,
+                            avg_speed_action_ratio=0.4,
+                            queue_action_ratio=0.4,
                             num_episodes=50,
                             episode_steps=args.sumo_seconds,
                             parameter_sharing_model=args.parameter_sharing_model,

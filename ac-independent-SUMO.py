@@ -46,7 +46,7 @@ from calculate_speed_control import CalculateSpeedError
 # Config Parser
 from MARLConfigParser import MARLConfigParser
 
-from actor_critic import QNetwork, Actor, one_hot_q_values
+from rl_core.actor_critic import QNetwork, Actor, one_hot_q_values
 from linear_schedule import LinearSchedule
 from replay_buffer import ReplayBuffer
 
