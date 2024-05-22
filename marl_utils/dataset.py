@@ -139,6 +139,7 @@ def GenerateDataset(env,
                 avg_speed_observed_by_agent = next_obses[agent][-2]
 
                 # TODO: Make constraint definitions configurable
+                # NOTE: This must correspond to the reward function used to train the single objective model
                 # constraint_1[agent] = CalculateMaxSpeedPension(speed=max_speed_observed_by_agent) 
                 constraint_1[agent] = CalculateSpeedError(speed=avg_speed_observed_by_agent, 
                                                         speed_limit=SPEED_LIMIT,

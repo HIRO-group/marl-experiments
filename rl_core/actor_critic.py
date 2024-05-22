@@ -36,9 +36,6 @@ class Actor(nn.Module):
         self.fc3 = nn.Linear(hidden_size, action_space_dim)
 
     def forward(self, x):
-        # print(f">>> forward device: {device}")
-        # x = torch.Tensor(x).to(device)
-        # print(f">>> X device: {x.device}")
 
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -46,6 +43,12 @@ class Actor(nn.Module):
         return logits
     
     def get_action(self, x):
+        """
+        Return action for a given observation, pi(a|s)
+        :param x: Observation tensor
+        :returns action, log of the probability of selecting the action, 
+        and the probability of the action
+        """
         # print(f">>> get_action device: {device}")
         x = torch.Tensor(x).to(device)
         logits = self.forward(x)

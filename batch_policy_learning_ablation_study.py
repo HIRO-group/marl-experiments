@@ -40,7 +40,7 @@ def AblationStudy(env:sumo_rl.parallel_env,
                 use_true_value_functions:bool=False,
                 true_G1:dict=None,
                 true_G2:dict=None,
-                device:torch.device='cpu') -> tuple[dict, dict, list, list]:
+                device:torch.device='cpu') -> None:
 
     """
     Perform the offline batch learning ablation study
@@ -54,7 +54,11 @@ def AblationStudy(env:sumo_rl.parallel_env,
     :param config_args: Configuration arguments used to set up the experiment
     :param nn_save_dir: Directory in which to save the models each round    # TODO: start saving FQE output
     :pram csv_save_dir: Directory in which to save the csv file
+    :param use_true_value_function: Flag indicating if true value functions should be used or not
+    :param true_G1: Dictionary mapping each agent to it's "true" G1 value function (must be provided if use_true_value_function is True)
+    :param true_G2: Dictionary mapping each agent to it's "true" G2 value function (must be provided if use_true_value_function is True)
     :param device: Torch device with which to do the reinforcement learning
+    :returns None
     """
 
 
@@ -98,7 +102,7 @@ def AblationStudy(env:sumo_rl.parallel_env,
 
         # TODO: config, currently set to the same size as the dataset itself
         sample_size = len(dataset[agent].buffer)
-        print(f"   > Generating mini dataset of size: {sample_size}")
+        print(f"   > Generating mini dataset of size: {sample_size} for offline rollouts")
         rollout_mini_dataset[agent] = dataset[agent].sample(sample_size)
 
     if (use_true_value_functions):
@@ -111,9 +115,10 @@ def AblationStudy(env:sumo_rl.parallel_env,
             sys.exit(1)
 
         # The provided "true" G1 and G2 value functions should be used regardless of the policy that 
-        # is being evaluated
+        # is being evaluated, here there is only one G1 and one G2
         G1_threshold_policy = true_G1
         G1_queue_policy = true_G1
+
         G2_threshold_policy = true_G2
         G2_queue_policy = true_G2
         
@@ -176,28 +181,28 @@ def AblationStudy(env:sumo_rl.parallel_env,
     print(f"   > Evaluating G1_threshold_policy in offline rollout using 'avg speed limit 7' policy")
     offline_g1_returns_threshold_policy = OfflineRollout(value_function=G1_threshold_policy, 
                                                         policies=dataset_policies[0], 
-                                                        mini_dataset=rollout_mini_dataset,  # TODO: Update with dataset that only has threshold observations
+                                                        mini_dataset=rollout_mini_dataset,  
                                                         device=device)
 
     # Perform an offline rollout using G2_speed_threshold and speed threshold policy
     print(f"   > Evaluating G2_threshold_policy in offline rollout using 'avg speed limit 7' policy")
     offline_g2_returns_threshold_policy = OfflineRollout(value_function=G2_threshold_policy, 
                                                         policies=dataset_policies[0], 
-                                                        mini_dataset=rollout_mini_dataset,  # TODO: Update with dataset that only has threshold observations
+                                                        mini_dataset=rollout_mini_dataset,  
                                                         device=device)
     
     # Perform an offline rollout using G1_queue_policy and queue policy
     print(f"   > Evaluating G1_queue_policy in offline rollout using 'queue' policy")
     offline_g1_returns_queue_policy = OfflineRollout(value_function=G1_queue_policy, 
                                                     policies=dataset_policies[1], 
-                                                    mini_dataset=rollout_mini_dataset,  # TODO: Update with dataset that only has queue observations
+                                                    mini_dataset=rollout_mini_dataset,  
                                                     device=device)
     
     # Perform an offline rollout using G2_queue and queue policy
     print(f"   > Evaluating G2_queue_policy in offline rollout using 'queue' policy")
     offline_g2_returns_queue_policy = OfflineRollout(value_function=G2_queue_policy, 
                                                     policies=dataset_policies[1], 
-                                                    mini_dataset=rollout_mini_dataset,  # TODO: Update with dataset that only has queue observations
+                                                    mini_dataset=rollout_mini_dataset,  
                                                     device=device)
     
     # Perform an online rollout using speed threshold policy
@@ -499,8 +504,8 @@ if __name__ == "__main__":
         # TODO: add these arguments to config file
         dataset = GenerateDataset(env, 
                             list_of_policies, 
-                            avg_speed_action_ratio=0.4,
-                            queue_action_ratio=0.4,
+                            avg_speed_action_ratio=0.0,
+                            queue_action_ratio=1.0,
                             num_episodes=50,
                             episode_steps=args.sumo_seconds,
                             parameter_sharing_model=args.parameter_sharing_model,

@@ -12,6 +12,7 @@ def OfflineRollout(value_function:dict, policies:dict, mini_dataset:dict, device
             using the provided policy and value function
             NOTE: This function assumes the dataset has been sampled such that mini_dataset contains lists of of experience
             tuples for each agent
+    :param device: The pytorch device to use for tensor math
     :returns Dictionary containing the cummulative return for all agents of the mini dataset according to the provided value functions
             normalized by the size of the mini dataset
     """
@@ -33,13 +34,14 @@ def OfflineRollout(value_function:dict, policies:dict, mini_dataset:dict, device
         # if (agent == '1'): print(f"     >>> actions_from_policy: {actions_from_policy}\n")
 
         # Evaluate the actions that were selected by the policies from this observation
-        # if (agent == '1'): print(f"     >>> values (BEFORE GATHER): {value_function[agent].forward(obses_array).to(device)}\n")
+        if (agent == '1'): print(f"     >>> values (BEFORE GATHER): {value_function[agent].forward(obses_array).to(device)}\n")
         values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
-        # if (agent == '1'): print(f"     >>> values (AFTER GATHER): {values}\n")
+        if (agent == '1'): print(f"     >>> values (AFTER GATHER): {values}\n")
 
         # Add up the values of all states from the mini dataset and normalize it by the size of the dataset
-        print(f"     > Normalizing offline rollout return by size of mini dataset: {len(obses_array)}")
+        print(f"     > Normalizing offline rollout return for agent '{agent}' by size of mini dataset: {len(obses_array)}")
         cumulative_return[agent] = sum(values)/(len(obses_array))
+        if (agent == '1'): print(f"     >>> cumulative_return[agent]: {cumulative_return[agent]}\n")
 
     return cumulative_return
 
@@ -113,7 +115,7 @@ def OnlineRollout(env, policies:dict, config_args, device:torch.device)->tuple[d
         next_obses, rewards, dones, truncated, info = env.step(actions)
 
         if np.prod(list(dones.values())):
-                
+            print(f" > Episode complete at after {sumo_step} steps")                
             break
 
         if config_args.parameter_sharing_model:
