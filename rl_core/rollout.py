@@ -34,14 +34,13 @@ def OfflineRollout(value_function:dict, policies:dict, mini_dataset:dict, device
         # if (agent == '1'): print(f"     >>> actions_from_policy: {actions_from_policy}\n")
 
         # Evaluate the actions that were selected by the policies from this observation
-        if (agent == '1'): print(f"     >>> values (BEFORE GATHER): {value_function[agent].forward(obses_array).to(device)}\n")
+        # if (agent == '1'): print(f"     >>> values (BEFORE GATHER): {value_function[agent].forward(obses_array).to(device)}\n")
         values = (value_function[agent].forward(obses_array)).to(device).gather(1, actions_from_policy.view(-1,1)).squeeze()
-        if (agent == '1'): print(f"     >>> values (AFTER GATHER): {values}\n")
+        # if (agent == '1'): print(f"     >>> values (AFTER GATHER): {values}\n")
 
         # Add up the values of all states from the mini dataset and normalize it by the size of the dataset
         print(f"     > Normalizing offline rollout return for agent '{agent}' by size of mini dataset: {len(obses_array)}")
         cumulative_return[agent] = sum(values)/(len(obses_array))
-        if (agent == '1'): print(f"     >>> cumulative_return[agent]: {cumulative_return[agent]}\n")
 
     return cumulative_return
 
