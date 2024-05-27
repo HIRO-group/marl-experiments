@@ -12,7 +12,7 @@ import torch.optim as optim
 
 import sumo_rl
 
-from MARLConfigParser import MARLConfigParser
+from marl_utils.MARLConfigParser import MARLConfigParser
 
 from rl_core.actor_critic import Actor, QNetwork, one_hot_q_values
 from rl_core.fitted_q_evaluation import FittedQEvaluation

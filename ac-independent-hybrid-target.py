@@ -45,11 +45,11 @@ from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
 from calculate_speed_control import CalculateSpeedError
 
 # Config Parser
-from MARLConfigParser import MARLConfigParser
+from marl_utils.MARLConfigParser import MARLConfigParser
 
 from rl_core.actor_critic import QNetwork, Actor, one_hot_q_values
-from linear_schedule import LinearSchedule
-from replay_buffer import ReplayBuffer
+from marl_utils.linear_schedule import LinearSchedule
+from marl_utils.replay_buffer import ReplayBuffer
 
 if __name__ == "__main__":
     

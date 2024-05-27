@@ -35,7 +35,7 @@ from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
 
 # Config Parser
-from MARLConfigParser import MARLConfigParser
+from marl_utils.MARLConfigParser import MARLConfigParser
 
 # Custom modules
 from rl_core.actor_critic import Actor, QNetwork, one_hot_q_values
