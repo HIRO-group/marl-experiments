@@ -361,7 +361,10 @@ def OfflineBatchRL(env:sumo_rl.parallel_env,
         csv_writer.writeheader()
 
     # Define a "mini" dataset to be used for offline rollouts (basically this will get passed through networks to evaluate them)
-    rollout_mini_dataset = {agent: dataset[agent].sample(50000) for agent in agents}    # TODO: config, currently set to the same size as the dataset itself
+    rollout_mini_dataset = {}
+    for agent in agents:
+        sample_size = len(dataset[agent].buffer)
+        rollout_mini_dataset[agent] = dataset[agent].sample(sample_size)    # TODO: config, currently set to the same size as the dataset itself
 
     # Define an "example" agent that can be used as a dictionary key when the specific agent doesn't matter
     eg_agent = agents[0]    
@@ -1260,7 +1263,7 @@ if __name__ == "__main__":
                               list_of_policies, 
                               avg_speed_action_ratio=0.4,
                               queue_action_ratio=0.4, 
-                              num_episodes=50,   
+                              num_episodes=1,   
                               episode_steps=args.sumo_seconds,
                               parameter_sharing_model=args.parameter_sharing_model,
                               device=device)
