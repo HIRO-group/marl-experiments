@@ -1263,7 +1263,7 @@ if __name__ == "__main__":
                               list_of_policies, 
                               avg_speed_action_ratio=0.4,
                               queue_action_ratio=0.4, 
-                              num_episodes=1,   
+                              num_episodes=50,   
                               episode_steps=args.sumo_seconds,
                               parameter_sharing_model=args.parameter_sharing_model,
                               device=device)
