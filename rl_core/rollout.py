@@ -29,7 +29,7 @@ def OfflineRollout(value_function:dict, policies:dict, mini_dataset:dict, device
         # if (agent == '1'): print(f"       >>> obses_array: {obses_array}\n")
 
         # Get the max_a Q(s,a) for the observation
-        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!TODO: POLICY IS NOT ALWAYS PRODUCING THE OPTIMAL ACITON!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # NOTE: It is possible that the policy does not always produce the optimal action
         actions_from_policy, _, _ = policies[agent].to(device).get_action(obses_array)  
         # if (agent == '1'): print(f"     >>> actions_from_policy: {actions_from_policy}\n")
 
