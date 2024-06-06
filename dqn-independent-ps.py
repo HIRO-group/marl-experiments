@@ -40,11 +40,11 @@ import sumo_rl
 import sys
 from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
-from linear_schedule import LinearSchedule
-from actor_critic import QNetwork
+from marl_utils.linear_schedule import LinearSchedule
+from rl_core.actor_critic import QNetwork
 
 # Config Parser
-from MARLConfigParser import MARLConfigParser
+from marl_utils.MARLConfigParser import MARLConfigParser
 
 if __name__ == "__main__":
 

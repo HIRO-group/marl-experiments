@@ -18,8 +18,8 @@ import os
 import csv
 import pettingzoo
 
-from replay_buffer import ReplayBuffer
-from linear_schedule import LinearSchedule
+from marl_utils.replay_buffer import ReplayBuffer
+from marl_utils.linear_schedule import LinearSchedule
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='DQN agent')

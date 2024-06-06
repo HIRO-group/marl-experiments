@@ -45,10 +45,10 @@ from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
 
 # Config Parser
-from MARLConfigParser import MARLConfigParser
-from actor_critic import QNetwork
-from linear_schedule import LinearSchedule
-from replay_buffer import ReplayBuffer
+from marl_utils.MARLConfigParser import MARLConfigParser
+from rl_core.actor_critic import QNetwork
+from marl_utils.linear_schedule import LinearSchedule
+from marl_utils.replay_buffer import ReplayBuffer
 
 
 if __name__ == "__main__":

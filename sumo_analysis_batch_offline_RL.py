@@ -27,11 +27,11 @@ import sys
 
 from sumo_custom_observation import CustomObservationFunction
 from sumo_custom_reward import MaxSpeedRewardFunction
-from actor_critic import Actor
+from rl_core.actor_critic import Actor
 from offline_batch_RL_policy_learning import CalculateMaxSpeedOverage
 
 # Config Parser
-from MARLConfigParser import MARLConfigParser
+from marl_utils.MARLConfigParser import MARLConfigParser
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:

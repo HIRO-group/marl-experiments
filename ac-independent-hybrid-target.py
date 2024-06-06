@@ -2,13 +2,14 @@
 ac-independent-SUMO.py
 
 Description:
-    Implementation of actor critic adapted for multi-agent environments. This implementation is origianlly based on
-    the Clean-RL version https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/sac_atari.py but uses Cross-Entropy for the actor's
-    loss computation. The critic utilizes the same Q-Network structure as as the other MARL methods in this repository and the
-    actor utilizes the same structure as the critic but with the addition of a layer that utilizes the softmax activation function
+    Implementation of actor critic adapted for multi-agent environments. This implementation is like the default actor-critic implementation 
+    except for the critic's update step. In this implementation (like the original), the td-target is first calculated (using the target network). 
+    Then the current Q(s,a) is estimate is calcuated using the critic network. The estimate is then modified by replacing the estimates that correspond 
+    to the sampled actions with their corresponding td_target values. The modified Q(s,a) estimates are then treated as the "target" for the loss calculation
+    and compared to the un-modified Q(s,a) estimate for that step.
 
 Usage:
-    python ac-indepndent-SUMO.py -c experiments/sumo-2x2-ac-independent.config    
+    python ac-indepndent-hybrid-target.py -c experiments/sumo-2x2-ac-independent.config    
 
 
 References:
@@ -393,14 +394,24 @@ for global_step in range(args.total_timesteps):
             agent = random.choice(agents)
             s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
 
+            # This is the section that differs from the original actor-critic implementation
             with torch.no_grad():
+                # Use the target network to calculate the target 
+                # (essentially the Q(s,a) of the observation corresponding to the action that should have been selected)
                 target = torch.max(target_network.forward(s_next_obses), dim=1)[0]
+                
+                # Calculate the expected Q values (in terminal states, the Q value is just r)
                 td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target * (1 - torch.Tensor(s_dones).to(device))
-            q_values = q_network.forward(s_obses)
-            # Get the max Q(s,a) for each observation in the batch
-            old_val = q_values.gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
 
-            loss = loss_fn(td_target, old_val)
+                target_q_values = q_network.forward(s_obses)
+
+                # Replace the values of Q(s,a) from the critic network with those calculated by the target
+                target_q_values[torch.arange(args.batch_size), torch.LongTensor(s_actions)] = td_target
+            
+            # Get the Q values for all actions (not just the ones in the batch)
+            q_values = q_network.forward(s_obses)
+            
+            loss = loss_fn(target_q_values, q_values)
             losses[agent] = loss.item()
 
             # optimize the model
@@ -443,15 +454,23 @@ for global_step in range(args.total_timesteps):
                 s_obses, s_actions, s_rewards, s_next_obses, s_dones = rb[agent].sample(args.batch_size)
 
                 with torch.no_grad():
+                    # Use the target network to calculate the target 
+                    # (essentially the Q(s,a) of the observation corresponding to the action that should have been selected)                    
                     target_max = torch.max(target_network[agent].forward(s_next_obses), dim=1)[0]
+                    
+                    # Calculate the expected Q values (in terminal states, the Q value is just r)
                     td_target = torch.Tensor(s_rewards).to(device) + args.gamma * target_max * (1 - torch.Tensor(s_dones).to(device))
+
+                    target_q_values = q_network[agent].forward(s_obses)
+
+                    # Replace the values of Q(s,a) from the critic network with those calculated by the target
+                    target_q_values[torch.arange(args.batch_size), torch.LongTensor(s_actions)] = td_target
+
+                # Get the Q values for all actions (not just the ones in the batch)
                 q_values = q_network[agent].forward(s_obses)
 
-                # Get the max Q(s,a) for each observation in the batch
-                old_val = q_values.gather(1, torch.LongTensor(s_actions).view(-1,1).to(device)).squeeze()
-
                 # Compute loss for agent's critic
-                loss = loss_fn(td_target, old_val)
+                loss = loss_fn(target_q_values, q_values)
                 losses[agent] = loss.item()
 
                 # optimize the model for the critic

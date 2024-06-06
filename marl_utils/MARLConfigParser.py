@@ -95,6 +95,12 @@ class MARLConfigParser():
                             help="The directory containing the nn .pt files from the speed overage model policies to use for generating a dataset.\n")
         self.parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", action="store_true", default=False, required=False, 
                             help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
+        self.parser.add_argument("--use-true-value-functions", dest="use_true_value_functions", type=lambda x:bool(strtobool(x)), default=False, required=False, 
+                            help="Flag indicating if true value functions should be ingested for the experiment.\n")
+        self.parser.add_argument("--nn-true-g1-dir", dest="nn_true_g1_dir", type=str, default="", required=False, 
+                            help="Directory containing the nn .pt files to load as the 'true' G1 constraint value functions.\n")
+        self.parser.add_argument("--nn-true-g2-dir", dest="nn_true_g2_dir", type=str, default="", required=False, 
+                            help="Directory containing the nn .pt files to load as the 'true' G2 constraint value functions.\n")
         self.parser.add_argument("--dataset-path", dest="dataset_path", type=str, default="", required=False, 
                             help="Path to previously generated dataset .pkl file.\n")
 
