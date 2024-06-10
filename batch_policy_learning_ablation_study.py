@@ -7,19 +7,17 @@ import pickle
 import numpy as np
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
 
 import sumo_rl
 
 from marl_utils.MARLConfigParser import MARLConfigParser
 
-from rl_core.actor_critic import Actor, QNetwork, one_hot_q_values
+from rl_core.actor_critic import Actor, QNetwork
 from rl_core.fitted_q_evaluation import FittedQEvaluation
 from rl_core.rollout import OfflineRollout, OnlineRollout
 
 from marl_utils.dataset import GenerateDataset
-from sumo_custom_observation import CustomObservationFunction
+from sumo_utils.sumo_custom.sumo_custom_observation import CustomObservationFunction
 
 
 # Make sure SUMO env variable is set

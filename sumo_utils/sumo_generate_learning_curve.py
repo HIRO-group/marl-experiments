@@ -16,12 +16,9 @@ Usage:
 """
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 import numpy as np
 from datetime import datetime
-from torch.distributions.categorical import Categorical
 
 import random
 import os
@@ -37,7 +34,7 @@ from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
 
 # Config Parser
 from marl_utils.MARLConfigParser import MARLConfigParser
-from rl_core.actor_critic import Actor, QNetwork
+from rl_core.actor_critic import Actor
 from calculate_speed_control import CalculateSpeedError
 
 # Make sure SUMO env variable is set
@@ -218,7 +215,6 @@ if __name__ == "__main__":
                 observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
                 observation_space_shape = tuple(np.array([observation_space_shape]))                        # Convert int to array and then to a tuple
     
-            # q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n, parameter_sharing_model).to(device) # In parameter sharing, all agents utilize the same q-network
             q_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
 
             # Load the Q-network file
@@ -233,7 +229,6 @@ if __name__ == "__main__":
             # Load the Q-Network NN model for each agent from the specified anaylisis checkpoint step from training
             for agent in agents: 
                 observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
-                # q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n)
                 q_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device) 
                 nn_file = "{}/{}-{}.pt".format(nn_dir, saved_step, agent)   
                 q_network[agent].load_state_dict(torch.load(nn_file))

@@ -31,20 +31,19 @@ import pickle
 import sumo_rl
 import sys
 import os
-from sumo_custom_observation import CustomObservationFunction
-from sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_utils.sumo_custom.sumo_custom_observation import CustomObservationFunction
 
 # Config Parser
 from marl_utils.MARLConfigParser import MARLConfigParser
 
 # Custom modules
-from rl_core.actor_critic import Actor, QNetwork, one_hot_q_values
+from rl_core.actor_critic import Actor, QNetwork
 from rl_core.fitted_q_evaluation import FittedQEvaluation
 from rl_core.fitted_q_iteration import FittedQIteration
 from rl_core.rollout import OfflineRollout, OnlineRollout
 
 from marl_utils.dataset import Dataset, GenerateDataset
-from calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
+from sumo_utils.sumo_custom.calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -1139,7 +1138,8 @@ if __name__ == "__main__":
         print(f"  > WARNING: Reward '{args.sumo_reward}' specified but being ignored")
     print(f"  > Setting up environment with standard 'queue' reward")
     print(f"    > This is to ensure that the 'g1' constraint always corresponds to speed threshold and the 'g2' constraint corresponds to queue length")
-    # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+    # NOTE: The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+    # This is to conform to the assumption that g1 is the avg speed constraint and g2 is the queue constraint
     env = sumo_rl.parallel_env(net_file=args.net, 
                             route_file=args.route,
                             use_gui=args.sumo_gui,

@@ -11,9 +11,6 @@ Usage:
 """
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions.categorical import Categorical
 
 import numpy as np
 import datetime
@@ -24,14 +21,14 @@ import os
 import sumo_rl
 import sys
 
-from sumo_custom_observation import CustomObservationFunction
-from sumo_custom_reward import MaxSpeedRewardFunction
-from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
+from sumo_custom.sumo_custom_observation import CustomObservationFunction
+from sumo_custom.sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_custom.sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
+from sumo_custom.calculate_speed_control import CalculateSpeedError
 
 # Config Parser
 from marl_utils.MARLConfigParser import MARLConfigParser
 from rl_core.actor_critic import Actor
-from calculate_speed_control import CalculateSpeedError
 
 
 # Make sure SUMO env variable is set
@@ -40,61 +37,6 @@ if 'SUMO_HOME' in os.environ:
     sys.path.append(tools)
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
-
-
-# # TODO: this should probably just go in its own file so it's consistent across all training
-# # TODO: May need to update this for actor critic, actor and critic should have the same "forward" structure
-# class QNetwork(nn.Module):
-#     def __init__(self, observation_space_shape, action_space_dim, parameter_sharing_model=False):
-#         super(QNetwork, self).__init__()
-#         self.parameter_sharing_model = parameter_sharing_model
-#         # Size of model depends on if parameter sharing was used or not
-#         if self.parameter_sharing_model:
-#             hidden_size = num_agents * 64
-#         else:
-#             hidden_size = 64    # TODO: should we make this a config parameter?
-#         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-#         self.fc2 = nn.Linear(hidden_size, hidden_size)
-#         self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-#     def forward(self, x):
-#         x = torch.Tensor(x).to(device)
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         x = self.fc3(x)
-#         return x
-
-# class Actor(nn.Module):
-#     def __init__(self, observation_space_shape, action_space_dim):
-#         super(Actor, self).__init__()
-#         hidden_size = 64
-#         self.fc1 = nn.Linear(np.array(observation_space_shape).prod(), hidden_size)
-#         self.fc2 = nn.Linear(hidden_size, hidden_size)
-#         self.fc3 = nn.Linear(hidden_size, action_space_dim)
-
-#     def forward(self, x):
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         # print(">> SHAPE OF X: {}".format(x.shape))
-#         logits = self.fc3(x)
-#         # print(">> SHAPE OF LOGITS: {}".format(logits.shape))
-#         return logits
-    
-#     def get_action(self, x):
-#         x = torch.Tensor(x).to(device)
-#         logits = self.forward(x)
-#         # Note that this is equivalent to what used to be called multinomial 
-#         # policy_dist.probs here will produce the same thing as softmax(logits)
-#         policy_dist = Categorical(logits=logits)
-#         # policy_dist = F.softmax(logits)
-#         # print(" >>> Categorical: {}".format(policy_dist.probs))
-#         # print(" >>> softmax: {}".format(F.softmax(logits)))
-#         action = policy_dist.sample()
-#         # Action probabilities for calculating the adapted loss
-#         action_probs = policy_dist.probs
-#         log_prob = F.log_softmax(logits, dim=-1)
-#         # return action, torch.transpose(log_prob, 0, 1), action_probs
-#         return action, log_prob, action_probs
 
 
 if __name__ == "__main__":

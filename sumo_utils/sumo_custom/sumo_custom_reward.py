@@ -2,13 +2,13 @@
 sumo_custom_reward.py
 
 Description:
-
-    
+    Implementation of custom reward function for the sumo-rl environment. The reward is defined as the
+    negative sqrt of the difference between the max observed speed and a speed threshold. This function can be
+    provided to the env using the `reward_fn` argument.
 """
 
 from sumo_rl import TrafficSignal
 from calculate_speed_control import CalculateMaxSpeedPension
-import numpy as np
 
 def MaxSpeedRewardFunction(ts:TrafficSignal):
         """

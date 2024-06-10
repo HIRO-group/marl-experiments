@@ -11,9 +11,6 @@ Usage:
 """
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions.categorical import Categorical
 import csv
 from datetime import datetime
 
@@ -25,10 +22,9 @@ import os
 import sumo_rl
 import sys
 
-from sumo_custom_observation import CustomObservationFunction
-from sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_custom.sumo_custom_observation import CustomObservationFunction
+from sumo_custom.calculate_speed_control import CalculateSpeedError
 from rl_core.actor_critic import Actor
-from offline_batch_RL_policy_learning import CalculateMaxSpeedOverage
 
 # Config Parser
 from marl_utils.MARLConfigParser import MARLConfigParser
@@ -41,9 +37,9 @@ else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
 
-# Define the speed overage threshold used to evaluate the g1 constraint 
+# Define the average speed limit threshold used to evaluate the g1 constraint 
 # (note this needs to match what is used in GenerateDataset)
-SPEED_OVERAGE_THRESHOLD = 13.89
+SPEED_LIMIT = 7.0
 
 # Hard coded to map agents trained on the 2x2.net.xml and 2x2.rou.xml SUMO configuration
 # to agents in the 3x3.net.xml and 3x3Grid2lanes.rou.xml SUMO configuration
@@ -85,36 +81,21 @@ if __name__ == "__main__":
 
     # Create the env
     # Sumo must be created using the sumo-rl module
-    # Note we have to use the parallel env here to conform to this implementation of dqn
-    # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-    if (args.sumo_reward == "custom"):
-        # Use the custom "max speed" reward function
-        print ( " > Evaluating model using CUSTOM reward")
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=args.sumo_gui,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                add_system_info=True,
-                                add_per_agent_info=True,                                
-                                reward_fn=MaxSpeedRewardFunction,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False)
-    else:
-        print ( " > Evaluating model using standard reward: {}".format(args.sumo_reward))
-        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=args.sumo_gui,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                add_system_info=True,
-                                add_per_agent_info=True,                                
-                                reward_fn=args.sumo_reward,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False)  
+    # NOTE: we have to use the parallel env here to conform to this implementation of dqn
+    # NOTE: The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
+    # This is to conform to the assumption that g1 is the avg speed constraint and g2 is the queue constraint
+    print(f"  > Setting up environment with standard 'queue' reward")
+    env = sumo_rl.parallel_env(net_file=args.net, 
+                            route_file=args.route,
+                            use_gui=args.sumo_gui,
+                            max_green=args.max_green,
+                            min_green=args.min_green,
+                            num_seconds=args.sumo_seconds,  # TODO: for some reason, the env is finishing after 1000 seconds
+                            add_system_info=True,   # Default is True
+                            add_per_agent_info=True,    # Default is True
+                            reward_fn='queue',
+                            observation_class=CustomObservationFunction,
+                            sumo_warnings=False)  
 
     agents = env.possible_agents
     num_agents = len(env.possible_agents)
@@ -241,9 +222,13 @@ if __name__ == "__main__":
             # At the end of a simulation, next_obses is an empty dictionary so don't log it
             try:
                 episode_rewards[agent] += rewards[agent]
-                max_speed_observed_by_agent = next_obses[agent][-1]
-                episode_constraint_1[agent] += CalculateMaxSpeedOverage(max_speed_observed_by_agent, SPEED_OVERAGE_THRESHOLD)
-                episode_constraint_2[agent] += rewards[agent]   # NOTE That right now, the g2 constraint is the same as the 'queue' model
+                avg_speed_observed_by_agent = next_obses[agent][-2]
+                episode_constraint_1[agent] += CalculateSpeedError(speed=avg_speed_observed_by_agent, 
+                                                               speed_limit=SPEED_LIMIT,
+                                                               lower_speed_limit=SPEED_LIMIT)
+                
+                # NOTE That right now, the g2 constraint is the same as the 'queue' model
+                episode_constraint_2[agent] += rewards[agent]
 
             except:
                 continue
