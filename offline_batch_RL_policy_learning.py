@@ -4,7 +4,9 @@ offline_batch_RL_policy_learning.py
 Description:
     Offline batch RL for learning a policy subject to constraints. The idea here is that we can utilize experiences from various
     policies to learn a new policy that is optimal according to some objective function and also obeys some secondary constraints.
-    This algorithm is essentially decentralized
+    Curerntly, this algorithm expects that 2 SUMO-related policies are provided to use in generating a new policy. The first is a "speed limit" policy
+    and the other is a "queue length" policy.
+    This algorithm is essentially decentralized.
 
     NOTE: 
     This file generates logs in .\batch_offline_RL_logs\<experiment>
