@@ -19,9 +19,7 @@ References:
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
-from torch.distributions.categorical import Categorical
 
 from distutils.util import strtobool
 import numpy as np
@@ -38,10 +36,10 @@ from pettingzoo.mpe import simple_spread_v3
 # SUMO dependencies
 import sumo_rl
 import sys
-from sumo_custom_observation import CustomObservationFunction
-from sumo_custom_reward import MaxSpeedRewardFunction
-from sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
-from calculate_speed_control import CalculateSpeedError
+from sumo_utils.sumo_custom.sumo_custom_observation import CustomObservationFunction
+from sumo_utils.sumo_custom.sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_utils.sumo_custom.sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
+from sumo_utils.sumo_custom.calculate_speed_control import CalculateSpeedError
 
 # Config Parser
 from marl_utils.MARLConfigParser import MARLConfigParser

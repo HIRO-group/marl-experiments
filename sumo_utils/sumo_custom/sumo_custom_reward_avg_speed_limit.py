@@ -2,8 +2,9 @@
 sumo_custom_reward_avg_speed_limit.py
 
 Description:
-
-    
+    Implementation of custom reward function for the sumo-rl environment. The reward is defined as the
+    negative difference between the average observed speed and a speed threshold. This function can be
+    provided to the env using the `reward_fn` argument.
 """
 
 from sumo_rl import TrafficSignal
@@ -12,7 +13,8 @@ from calculate_speed_control import CalculateSpeedError
 
 def AverageSpeedLimitReward(ts:TrafficSignal):
         """
-
+        Return the negative of difference between the average observered speed of all vehicles at the intersection and a threshold 
+        If there are no vehicles in the intersection, returns 0.0
         """
         
         # TODO: Config

@@ -22,10 +22,8 @@ References:
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from distutils.util import strtobool
 import collections
 import numpy as np
 
@@ -38,8 +36,9 @@ import csv
 # SUMO dependencies
 import sumo_rl
 import sys
-from sumo_custom_observation import CustomObservationFunction
-from sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_utils.sumo_custom.sumo_custom_observation import CustomObservationFunction
+from sumo_utils.sumo_custom.sumo_custom_reward import MaxSpeedRewardFunction
+from sumo_utils.sumo_custom.sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
 from marl_utils.linear_schedule import LinearSchedule
 from rl_core.actor_critic import QNetwork
 
@@ -120,6 +119,20 @@ if using_sumo:
                                 reward_fn=MaxSpeedRewardFunction,
                                 observation_class=CustomObservationFunction,
                                 sumo_warnings=False)
+    elif (args.sumo_reward == "custom-average-speed-limit"):
+        # Use the custom "avg speed limit" reward function
+        print (f" > Using CUSTOM AVERAGE SPEED LIMIT reward")
+        env = sumo_rl.parallel_env(net_file=args.net, 
+                                route_file=args.route,
+                                use_gui=args.sumo_gui,
+                                max_green=args.max_green,
+                                min_green=args.min_green,
+                                num_seconds=args.sumo_seconds,
+                                add_system_info=True,       # Default is True
+                                add_per_agent_info=True,    # Default is True                                
+                                reward_fn=AverageSpeedLimitReward,
+                                observation_class=CustomObservationFunction,
+                                sumo_warnings=False)   
     else:
         print ( " > Using standard reward")
         # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections

@@ -6,7 +6,7 @@ import numpy as np
 from datetime import datetime
 
 
-from calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
+from sumo_utils.sumo_custom.calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
 
 # Based on ReplayBuffer class 
 # modified from https://github.com/seungeunrho/minimalRL/blob/master/dqn.py#

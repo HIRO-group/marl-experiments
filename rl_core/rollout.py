@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
+from sumo_utils.sumo_custom.calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
 
 
 def OfflineRollout(value_function:dict, policies:dict, mini_dataset:dict, device:torch.device)->dict:
@@ -51,8 +51,8 @@ def OfflineRollout(value_function:dict, policies:dict, mini_dataset:dict, device
 def OnlineRollout(env, policies:dict, config_args, device:torch.device)->tuple[dict, dict, dict]:
     """
     Perform a 1-episode rollout of a provided policy to evaluate the constraint functions g1 and g2.
-    This function assumes that the environment has been set up with the 'queue' reward function when evaluating the
-    g1 and g2 constraints.
+    This function assumes that the environment is a sumo-rl environment and has been set up with the 'queue' reward 
+    function (and custom observation function) when evaluating the g1 and g2 constraints.
 
     NOTE: this is an "online" rollout because it assumes that all agents are using their current learned policy
 
