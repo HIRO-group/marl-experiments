@@ -45,7 +45,7 @@ from rl_core.fitted_q_iteration import FittedQIteration
 from rl_core.rollout import OfflineRollout, OnlineRollout
 
 from marl_utils.dataset import Dataset, GenerateDataset
-from sumo_utils.sumo_custom.calculate_speed_control import CalculateSpeedError, CalculateMaxSpeedPension
+from sumo_utils.sumo_custom.calculate_speed_control import CalculateSpeedError
 
 # Make sure SUMO env variable is set
 if 'SUMO_HOME' in os.environ:
@@ -133,7 +133,6 @@ def CalculateAverageRewardPerStep(queue_length_env:sumo_rl.parallel_env,
         for agent in agents:
             max_speed_observed_by_agent = next_obses[agent][-1]
             avg_speed_observed_by_agent = next_obses[agent][-2]
-            # episode_constraint_1[agent] += CalculateMaxSpeedPension(speed=max_speed_observed_by_agent)
             episode_constraint_1[agent] += CalculateSpeedError(speed=avg_speed_observed_by_agent, 
                                                                speed_limit=SPEED_LIMIT,
                                                                lower_speed_limit=SPEED_LIMIT)
