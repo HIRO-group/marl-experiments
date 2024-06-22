@@ -21,7 +21,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
-from distutils.util import strtobool
 import numpy as np
 
 # # TODO: fix conda environment to include the version of gym that has Monitor module
