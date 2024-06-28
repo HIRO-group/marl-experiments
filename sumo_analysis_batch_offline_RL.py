@@ -59,10 +59,20 @@ if __name__ == "__main__":
     parser = MARLConfigParser()
     args = parser.parse_args()
     
-
+    # QUEUE BASELINE
+    # agent_policy_map = {'0': args.nn_queue_directory,
+    #                     '1': args.nn_queue_directory,
+    #                     '2': args.nn_queue_directory,
+    #                     '3': args.nn_queue_directory,
+    #                     '4': args.nn_queue_directory,
+    #                     '5': args.nn_queue_directory,
+    #                     '6': args.nn_queue_directory,
+    #                     '7': args.nn_queue_directory,
+    #                     '8': args.nn_queue_directory}
+    
     # TODO: these need to move to config once json is implemented
-    # TODO: add another arg for asl7/asl10 difference
-    # SCENARIO 1
+    # TODO: add another arg for asl7/asl10 difference, right now we're only able to upload one policy
+    # SCENARIO 1 & 2
     agent_policy_map = {'0': args.nn_speed_overage_directory,
                         '1': args.nn_speed_overage_directory,
                         '2': args.nn_speed_overage_directory,
