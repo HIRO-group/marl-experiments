@@ -181,7 +181,8 @@ obses, _ = env.reset()
 # Initialize data structures for training
 # NOTE: When using parameter sharing, we only need one network & optimizer but when not using parameter sharing,
 # each agent gets its own
-rb = {agent: ReplayBuffer(args.buffer_size) for agent in agents}    # Dictionary for storing replay buffers (maps agent to a replay buffer)
+# Dictionary for storing replay buffers (maps agent to a replay buffer)
+rb = {agent: ReplayBuffer(args.buffer_size) for agent in agents}
 print(" > Initializing neural networks")
 
 if args.parameter_sharing_model:
@@ -203,19 +204,31 @@ if args.parameter_sharing_model:
 
     else:
         print(f"   > Global observations NOT enabled")
-        observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  # Convert (X,) shape from tuple to int so it can be modified
+
+        # Convert (X,) shape from tuple to int so it can be modified
+        observation_space_shape = np.array(observation_spaces[eg_agent].shape).prod() + num_agents  
         observation_space_shape = tuple(np.array([observation_space_shape]))   
+        
         for agent in agents:
             onehot = np.zeros(num_agents)
             onehot[onehot_keys[agent]] = 1.0
             obses[agent] = np.hstack([onehot, obses[agent]])
 
-    q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)         # Single q-network (i.e. "critic") for training
-    target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)    # The target q-network
-    target_network.load_state_dict(q_network.state_dict())                                      
-    actor_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device)        # Single actor network for training
-    optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)                       # Optimizer for the critic
-    actor_optimizer = optim.Adam(list(actor_network.parameters()), lr=args.learning_rate)       # Optimizer for the actor
+    # Single q-network (i.e. "critic") for training
+    q_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
+
+    # The target q-network
+    target_network = QNetwork(observation_space_shape, action_spaces[eg_agent].n).to(device)
+    target_network.load_state_dict(q_network.state_dict())                              
+
+    # Single actor network for training        
+    actor_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device)
+    
+    # Optimizer for the critic
+    optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
+
+    # Optimizer for the actor
+    actor_optimizer = optim.Adam(list(actor_network.parameters()), lr=args.learning_rate)
     
     print(f"  > Observation space shape: {observation_space_shape}".format(observation_space_shape))
     print(f"  > Actionspace shape: {action_spaces[agent].n}")    
@@ -224,27 +237,44 @@ if args.parameter_sharing_model:
 
 else:
     print(f"  > Parameter sharing NOT enabled")
-    q_network = {}          # Dictionary for storing q-networks (maps agent to a q-network), these are the "critics"
-    target_network = {}     # Dictionary for storing target networks (maps agent to a network)
-    actor_network = {}      # Dictionary for storing actor networks (maps agents to a network)
-    optimizer = {}          # Dictionary for storing optimizer for each agent's network
-    actor_optimizer = {}    # Dictionary for storing the optimizers used to train the actor networks 
+    # Dictionary for storing q-networks (maps agent to a q-network), these are the "critics"
+    q_network = {}
 
-    # TODO: add option to use parameter sharing, in that case the structure of each neural network will change (only one actor and critic for 
-    # all agents )
+    # Dictionary for storing target networks (maps agent to a network)
+    target_network = {}
+    
+    # Dictionary for storing actor networks (maps agents to a network)
+    actor_network = {}
+
+    # Dictionary for storing optimizer for each agent's network
+    optimizer = {}
+
+    # Dictionary for storing the optimizers used to train the actor networks 
+    actor_optimizer = {}
+
     for agent in agents:
         observation_space_shape = tuple(shape * num_agents for shape in observation_spaces[agent].shape) if args.global_obs else observation_spaces[agent].shape
+        
         q_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
+        
         target_network[agent] = QNetwork(observation_space_shape, action_spaces[agent].n).to(device)
-        target_network[agent].load_state_dict(q_network[agent].state_dict())    # Intialize the target network the same as the critic network
+        
+        # Intialize the target network the same as the critic network
+        target_network[agent].load_state_dict(q_network[agent].state_dict())
+
         actor_network[agent] = Actor(observation_space_shape, action_spaces[agent].n).to(device)
-        optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate) # All agents use the same optimizer for training
+        
+        # All agents use the same optimizer for training
+        optimizer[agent] = optim.Adam(q_network[agent].parameters(), lr=args.learning_rate)
+        
         actor_optimizer[agent] = optim.Adam(list(actor_network[agent].parameters()), lr=args.learning_rate)
 
         print(f"   > Agent: {agent}".format(agent))    
         print(f"   > Observation space shape: {observation_space_shape}".format(observation_space_shape))
         print(f"   > Action space shape: {action_spaces[agent].n}")
-    print(f"  > Q-network structure: { q_network[agent]}") # network of last agent
+
+    # network of last agent
+    print(f"  > Q-network structure: { q_network[agent]}")
 
     # Global states
     if args.global_obs:
@@ -266,13 +296,26 @@ print(" > Device: ",device.__repr__())
 if args.render:
     env.render()    # TODO: verify that the sumo env supports render
 
-episode_rewards = {agent: 0 for agent in agents}                # Dictionary that maps the each agent to its cumulative reward each episode
-episode_max_speeds = {agent: [] for agent in agents}            # Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
-episode_avg_speed_rewards = {agent: 0 for agent in agents}      # Dictionary that maps each agent to the avg speed reward obbtained by each agent
-episode_accumulated_stopped = {agent: 0 for agent in agents}    # Dictionary that maps each agent to the accumulated number of stopped cars it observes during episode
-actions = {agent: None for agent in agents}                     # Dictionary that maps each agent to the action it selected
-losses = {agent: None for agent in agents}                      # Dictionary that maps each agent to the loss values for its critic network
-actor_losses = {agent: None for agent in agents}                # Dictionary that maps each agent to the loss values for its actor network
+# Dictionary that maps the each agent to its cumulative reward each episode
+episode_rewards = {agent: 0 for agent in agents}
+
+# Dictionary that maps each agent to the maximum speed observed at each step of the agent's episode
+episode_max_speeds = {agent: [] for agent in agents}
+
+# Dictionary that maps each agent to the avg speed reward obbtained by each agent
+episode_avg_speed_rewards = {agent: 0 for agent in agents}
+
+# Dictionary that maps each agent to the accumulated number of stopped cars it observes during episode
+episode_accumulated_stopped = {agent: 0 for agent in agents}
+
+# Dictionary that maps each agent to the action it selected
+actions = {agent: None for agent in agents}
+
+# Dictionary that maps each agent to the loss values for its critic network
+losses = {agent: None for agent in agents}
+
+# Dictionary that maps each agent to the loss values for its actor network
+actor_losses = {agent: None for agent in agents}
 lir_1 = 0
 uir_1 = 0
 var_1 = 0
@@ -328,25 +371,46 @@ for global_step in range(args.total_timesteps):
         env.render()
 
     # Extract performance about how we're doing so far
-    lir_1 += min(rewards.values())          # Accumulated min reward received by any agent this step
-    uir_1 += max(rewards.values())          # Accumulated max reward received by any agent this step
-    var_1 += np.var(list(rewards.values())) # Accumulated variance of rewards received by all agents this step
+    # Accumulated min reward received by any agent this step
+    lir_1 += min(rewards.values())
+
+    # Accumulated max reward received by any agent this step
+    uir_1 += max(rewards.values())
+
+    # Accumulated variance of rewards received by all agents this step
+    var_1 += np.var(list(rewards.values()))
     cnt += 1
 
     for agent in agents:
 
         episode_rewards[agent] += rewards[agent]
         # TODO: need to modify this for global observations
-        episode_max_speeds[agent].append(next_obses[agent][-1])     # max speed is the last element of the custom observation array
-        agent_avg_speed = next_obses[agent][-2]                     # Avg speed reward has been added to observation (as the second to last element)   
-        # TODO: config
-        SPEED_LIMIT = 7.0
-        avg_speed_reward = CalculateSpeedError(speed=agent_avg_speed, 
-                                            speed_limit=SPEED_LIMIT,
-                                            lower_speed_limit=SPEED_LIMIT)
+        # max speed is the last element of the custom observation array
+        episode_max_speeds[agent].append(next_obses[agent][-1])
+        
+        # Avg speed reward has been added to observation (as the second to last element)   
+        agent_avg_speed = next_obses[agent][-2]
+
+        # The wrapper class needs to be unwrapped for some reason in order to properly access info 
+        info = env.unwrapped.env._compute_info()
+        
+        # Total number of cars stopped at this agent
+        agent_cars_stopped = info[f'{agent}_stopped']
+        
+        if ((agent_cars_stopped == 0.0) and (agent_avg_speed == 0.0)):
+            # No cars and no average speed means there are no cars present in the intersection
+            avg_speed_reward = 0.0
+
+        else:
+            # Compute this metric only if there were cars present in the intersection 
+            # This conforms to the way the avg speed rewards are calculated
+            avg_speed_reward = CalculateSpeedError(speed=agent_avg_speed, 
+                                            speed_limit=args.sumo_average_speed_limit,
+                                            lower_speed_limit=args.sumo_average_speed_limit)
+            
         episode_avg_speed_rewards[agent] += avg_speed_reward
-        info = env.unwrapped.env._compute_info()                            # The wrapper class needs to be unwrapped for some reason in order to properly access info 
-        episode_accumulated_stopped[agent] += info[f'{agent}_stopped']      # Total number of cars stopped at this agent
+
+        episode_accumulated_stopped[agent] += agent_cars_stopped
 
         rb[agent].put((obses[agent], actions[agent], rewards[agent], next_obses[agent], dones[agent]))
 
@@ -485,9 +549,14 @@ for global_step in range(args.total_timesteps):
 
     # If all agents are done, log the results and reset the evnironment to continue training
     if np.prod(list(dones.values())) or (global_step % args.max_cycles == args.max_cycles-1): 
-        system_episode_reward = sum(list(episode_rewards.values()))                         # Accumulated reward of all agents
-        system_episode_avg_speed_reward = sum(list(episode_avg_speed_rewards.values()))     # Accumulated avg speed reward of all agents
-        system_accumulated_stopped = sum(list(episode_accumulated_stopped.values()))        # Accumulated number of cars stopped at each step for all agents
+        # Accumulated reward of all agents
+        system_episode_reward = sum(list(episode_rewards.values()))
+
+        # Accumulated avg speed reward of all agents
+        system_episode_avg_speed_reward = sum(list(episode_avg_speed_rewards.values()))
+        
+        # Accumulated number of cars stopped at each step for all agents        
+        system_accumulated_stopped = sum(list(episode_accumulated_stopped.values()))
 
         # Calculate the maximum of all max speeds observed from each agent during the episode
         agent_max_speeds = {agent:0 for agent in agents}
@@ -496,8 +565,11 @@ for global_step in range(args.total_timesteps):
         system_episode_max_speed = max(list(agent_max_speeds.values()))
         system_episode_min_max_speed = min(list(agent_max_speeds.values()))
         
-        info = env.unwrapped.env._compute_info()                # The wrapper class needs to be unwrapped for some reason in order to properly access info 
-        agents_total_stopped = info['agents_total_stopped']     # TOtal number of cars stopped at end of episode
+        # The wrapper class needs to be unwrapped in order to properly access info 
+        info = env.unwrapped.env._compute_info()
+        
+        # Total number of cars stopped at end of episode
+        agents_total_stopped = info['agents_total_stopped']
         
         print(f"\n > global_step={global_step}")
         print(f"   > agent_max_speeds {agent_max_speeds}")
