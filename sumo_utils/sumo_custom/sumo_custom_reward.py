@@ -28,7 +28,7 @@ def CreateSumoReward(args) -> str | FunctionType:
         reward_function = MaxSpeedRewardFunction(args.sumo_max_speed_threshold, args.sumo_min_speed_threshold)
 
     elif (args.sumo_reward == "custom-average-speed-limit"):
-        print (f" > Using CUSTOM AVERAGE SPEED LIMIT reward")
+        print (f" > Using CUSTOM AVERAGE SPEED LIMIT reward with speed limit of {args.sumo_average_speed_limit}")
         reward_function = AverageSpeedLimitReward(args.sumo_average_speed_limit)
 
     elif (args.sumo_reward in TrafficSignal.reward_fns.keys()):

@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
     # Create the env
     # Sumo must be created using the sumo-rl module
-    # NOTE we have to use the parallel env here to conform to this implementation of dqn
+    # NOTE: we have to use the parallel env here to conform to this implementation of dqn
     sumo_reward_function = CreateSumoReward(args=args)
 
     env = sumo_rl.parallel_env(net_file=args.net, 

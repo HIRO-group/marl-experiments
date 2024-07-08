@@ -97,8 +97,10 @@ class MARLConfigParser():
                             help="The directory containing the nn .pt files to load for analysis.\n")
         self.parser.add_argument("--nn-queue-directory", dest="nn_queue_directory", type=str, default=None, required=True, 
                             help="The directory containing the nn .pt files from the queue model policies to use for generating a dataset.\n")
-        self.parser.add_argument("--nn-speed-overage-directory", dest="nn_speed_overage_directory", type=str, default=None, required=True, 
-                            help="The directory containing the nn .pt files from the speed overage model policies to use for generating a dataset.\n")
+        self.parser.add_argument("--nn-speed-overage-directory", dest="nn_speed_overage_directory", type=str, default=None, required=False, 
+                            help="The directory containing the nn .pt files from the speed overage model policies (e.g. ASL7) to use for generating a dataset or performing analysis.\n")
+        self.parser.add_argument("--nn-speed-overage-directory-2", dest="nn_speed_overage_directory_2", type=str, default=None, required=False, 
+                            help="The directory containing the nn .pt files from the second speed overage model policies (e.g. ASL10) to use for generating a dataset or performing analysis.\n")
         self.parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", action="store_true", default=False, required=False, 
                             help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
         self.parser.add_argument("--use-true-value-functions", dest="use_true_value_functions", type=lambda x:bool(strtobool(x)), default=False, required=False, 
