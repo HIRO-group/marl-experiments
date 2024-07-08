@@ -179,7 +179,8 @@ obses, _ = env.reset()
 # Initialize data structures for training
 # NOTE: When using parameter sharing, we only need one network & optimizer but when not using parameter sharing,
 # each agent gets its own
-rb = {agent: ReplayBuffer(args.buffer_size) for agent in agents}    # Dictionary for storing replay buffers (maps agent to a replay buffer)
+# Dictionary for storing replay buffers (maps agent to a replay buffer)
+rb = {agent: ReplayBuffer(args.buffer_size) for agent in agents}
 print(" > Initializing neural networks")
 
 if args.parameter_sharing_model:
