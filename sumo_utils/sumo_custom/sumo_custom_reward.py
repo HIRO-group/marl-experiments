@@ -1,5 +1,8 @@
 """
-Function for defininging the custom sumo reward using experiment arguments
+sumo_custom_reward.py 
+
+Description:
+    Function for defininging the custom sumo reward using experiment arguments
 """
 
 from types import FunctionType

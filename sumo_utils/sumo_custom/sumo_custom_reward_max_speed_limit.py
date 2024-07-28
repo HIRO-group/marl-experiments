@@ -1,5 +1,5 @@
 """
-sumo_custom_reward.py
+sumo_custom_reward_max_speed_limit.py
 
 Description:
     Implementation of custom reward function for the sumo-rl environment. The reward is defined as the
