@@ -80,7 +80,13 @@ class MARLConfigParser():
         self.parser.add_argument("--maxgreen", dest="max_green", type=int, default=30, required=False, help="Maximum time for green lights in SUMO environment.\n")
         self.parser.add_argument("--sumo-gui", dest="sumo_gui", action="store_true", default=False, help="Run with visualization on SUMO (may require firewall permissions).\n")
         self.parser.add_argument("--sumo-seconds", dest="sumo_seconds", type=int, default=10000, required=False, help="Number of simulation seconds. The number of seconds the simulation must end.\n")
-        self.parser.add_argument("--sumo-reward", dest="sumo_reward", type=str, default='wait', required=False, help="Reward function: \nThe 'queue'reward returns the negative number of total vehicles stopped at all agents each step, \nThe 'wait' reward returns the negative number of cummulative seconds that vehicles have been waiting in the episode.\n")
+        self.parser.add_argument("--sumo-reward", dest="sumo_reward", type=str, default='wait', required=False, help="Reward function: \nThe 'queue'reward returns the negative number of total vehicles stopped at all agents each step, \
+                                                                                                                        \nThe 'wait' reward returns the negative number of cummulative seconds that vehicles have been waiting in the episode. \
+                                                                                                                        \nThe 'custom-average-speed-limit' reward returns the negative difference between the average speed of all vehicles in the intersection and a provided speed limit, \
+                                                                                                                        \nThe 'custom' reward returns the negative sqrt of the difference between the maximum speed of all vehicles in the intersection and a range of allowable speeds.")
+        self.parser.add_argument("--sumo-average-speed-limit", dest="sumo_average_speed_limit", type=float, default=7.0, required=False, help="Average speed limit to use if reward function is 'custom-average-speed-limit'\n")
+        self.parser.add_argument("--sumo-max-speed-threshold", dest="sumo_max_speed_threshold", type=float, default=13.89, required=False, help="Maximum allowable speed limit to use if reward function is 'custom'\n")
+        self.parser.add_argument("--sumo-min-speed-threshold", dest="sumo_min_speed_threshold", type=float, default=1.0, required=False, help="Minimum allowable speed limit to use if reward function is 'custom'\n")
 
         # Configuration parameters for analyzing sumo env
         self.parser.add_argument("--analysis-steps", dest="analysis_steps", type=int, default=500, required=True, 
@@ -91,8 +97,10 @@ class MARLConfigParser():
                             help="The directory containing the nn .pt files to load for analysis.\n")
         self.parser.add_argument("--nn-queue-directory", dest="nn_queue_directory", type=str, default=None, required=True, 
                             help="The directory containing the nn .pt files from the queue model policies to use for generating a dataset.\n")
-        self.parser.add_argument("--nn-speed-overage-directory", dest="nn_speed_overage_directory", type=str, default=None, required=True, 
-                            help="The directory containing the nn .pt files from the speed overage model policies to use for generating a dataset.\n")
+        self.parser.add_argument("--nn-speed-overage-directory", dest="nn_speed_overage_directory", type=str, default=None, required=False, 
+                            help="The directory containing the nn .pt files from the speed overage model policies (e.g. ASL7) to use for generating a dataset or performing analysis.\n")
+        self.parser.add_argument("--nn-speed-overage-directory-2", dest="nn_speed_overage_directory_2", type=str, default=None, required=False, 
+                            help="The directory containing the nn .pt files from the second speed overage model policies (e.g. ASL10) to use for generating a dataset or performing analysis.\n")
         self.parser.add_argument("--parameter-sharing-model", dest="parameter_sharing_model", action="store_true", default=False, required=False, 
                             help="Flag indicating if the model trained leveraged parameter sharing or not (needed to identify the size of the model to load).\n")
         self.parser.add_argument("--use-true-value-functions", dest="use_true_value_functions", type=lambda x:bool(strtobool(x)), default=False, required=False, 

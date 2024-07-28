@@ -1,53 +1,47 @@
 """
-sumo_custom_reward.py
+sumo_custom_reward.py 
 
 Description:
-    Implementation of custom reward function for the sumo-rl environment. The reward is defined as the
-    negative sqrt of the difference between the max observed speed and a speed threshold. This function can be
-    provided to the env using the `reward_fn` argument.
+    Function for defininging the custom sumo reward using experiment arguments
 """
 
+from types import FunctionType
+import sys
+
 from sumo_rl import TrafficSignal
-from calculate_speed_control import CalculateMaxSpeedPension
+from .sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
+from .sumo_custom_reward_max_speed_limit import MaxSpeedRewardFunction
 
-def MaxSpeedRewardFunction(ts:TrafficSignal):
-        """
-        Return the "pension" (i.e. sqrt of difference) between the max observered speed of all vehicles at the intersection and a threshold 
-        If there are no vehicles in the intersection, returns 0.0
-        """
-        
-        # TODO: make this configurable
-        SPEED_THRESHOLD = 13.89 # Chosen based on the "speed" configuration parameter set in many of the defaul .net files
-                                # Note this value is actually never observed during training 
-        # SPEED_THRESHOLD = 16.0  # Chosen because it is between the minimum max observed speed (15.11) and the max max observed speed during training
-                                # Using normal reward function (18.44)
-        # SPEED_THRESHOLD = 18.44 # maximum observed speed during training using normal reward function
-        
-        # SPEED_THRESHOLD = 10.0
-    
-        # SPEED_THRESHOLD = 20.0
 
-        # LOWER_SPEED_THRESHOLD = 1.0
-        # LOWER_SPEED_THRESHOLD = 0.01
-        LOWER_SPEED_THRESHOLD = 1.0
-        # LOWER_SPEED_THRESHOLD = 0.0
-        
-        max_speed = 0.0
 
-        # Get all vehicles at the intersection
-        vehs = ts._get_veh_list()
-        if len(vehs) == 0:
-            pension = 0.0
+def CreateSumoReward(args) -> str | FunctionType:
+    """
+    Function for defining the sumo reward function (either custom or built-in)
 
-        # Find the max speed of all vehicles in the intersection
-        for v in vehs:
-            speed = ts.sumo.vehicle.getSpeed(v)
-            if (speed > max_speed):
-                max_speed = speed
+    :param args: Config args object
+    :returns Either a string definining built in reward function or a custom function 
+    """
 
-        # Calculate the negative sqrt of the max speed from the allowable threshold
-        pension = CalculateMaxSpeedPension(speed=max_speed,
-                                           speed_limit=SPEED_THRESHOLD,
-                                           lower_speed_limit=LOWER_SPEED_THRESHOLD)
-       
-        return pension
+
+    # Default value is assumed to be one of the default sumo reward strings
+    # https://github.com/LucasAlegre/sumo-rl/blob/main/sumo_rl/environment/traffic_signal.py#L308
+
+    if (args.sumo_reward == "custom"):
+        print (f" > Using CUSTOM reward")
+        reward_function = MaxSpeedRewardFunction(args.sumo_max_speed_threshold, args.sumo_min_speed_threshold)
+
+    elif (args.sumo_reward == "custom-average-speed-limit"):
+        print (f" > Using CUSTOM AVERAGE SPEED LIMIT reward with speed limit of {args.sumo_average_speed_limit}")
+        reward_function = AverageSpeedLimitReward(args.sumo_average_speed_limit)
+
+    elif (args.sumo_reward in TrafficSignal.reward_fns.keys()):
+        # Use a built in function
+        print (f" > Using standard reward: '{args.sumo_reward}'")
+        reward_function = args.sumo_reward
+
+    else:
+        print(f" > Unrecogrnized reward function provided: {args.sumo_reward}")
+        sys.exit(1)
+
+
+    return reward_function

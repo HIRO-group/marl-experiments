@@ -25,9 +25,13 @@ A repsitory for conducting multi-agent reinforcement learning experiments.
     ```
  3. Activate the environment.
     ```
-    conda activate mqop
+    conda activate marl-exp
     ```
- 4. It is possible to run experiments using command line arguments, but to make it easier to define experiments and maintain tracability for data processing, configurations are defined using configuration files. These files are then passed to the desired module via command line. For example, to run the actor-critic single objective learning algorithm:
+ 4. Install the marl_experiments package
+    ```
+    pip install -e .
+    ```
+ 5. It is possible to run experiments using command line arguments, but to make it easier to define experiments and maintain tracability for data processing, configurations are defined using configuration files. These files are then passed to the desired module via command line. For example, to run the actor-critic single objective learning algorithm:
     ```
     python ac-indpendent-SUMO.py -c experiments/sumo-4x4-dqn-independent.config
     ```

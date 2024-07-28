@@ -41,8 +41,7 @@ import csv
 import sumo_rl
 import sys
 from sumo_utils.sumo_custom.sumo_custom_observation import CustomObservationFunction
-from sumo_utils.sumo_custom.sumo_custom_reward import MaxSpeedRewardFunction
-from sumo_utils.sumo_custom.sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
+from sumo_utils.sumo_custom.sumo_custom_reward import CreateSumoReward
 
 # Config Parser
 from marl_utils.MARLConfigParser import MARLConfigParser
@@ -105,45 +104,18 @@ if using_sumo:
     # Sumo must be created using the sumo-rl module
     # Note we have to use the parallel env here to conform to this implementation of dqn
 
-    if (args.sumo_reward == "custom"):
-        # Use the custom "max speed" reward function
-        print ( " > Using CUSTOM reward")
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=args.sumo_gui,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                reward_fn=MaxSpeedRewardFunction,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False)
-    elif (args.sumo_reward == "custom-average-speed-limit"):
-        # Use the custom "avg speed limit" reward function
-        print (f" > Using CUSTOM AVERAGE SPEED LIMIT reward")
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=args.sumo_gui,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                add_system_info=True,       # Default is True
-                                add_per_agent_info=True,    # Default is True                                
-                                reward_fn=AverageSpeedLimitReward,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False)       
-    else:
-        print ( " > Using standard reward")
-        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=args.sumo_gui,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                reward_fn=args.sumo_reward,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False)
+    sumo_reward_function = CreateSumoReward(args=args)
 
+    env = sumo_rl.parallel_env(net_file=args.net, 
+                            route_file=args.route,
+                            use_gui=True,
+                            max_green=args.max_green,
+                            min_green=args.min_green,
+                            num_seconds=args.sumo_seconds,
+                            reward_fn=sumo_reward_function,
+                            observation_class=CustomObservationFunction,
+                            sumo_warnings=False)
+    
 else: 
     print(" > ENV ARGS: {}".format(args.env_args))
     exec(f"env = {args.gym_id}.parallel_env({args.env_args})")

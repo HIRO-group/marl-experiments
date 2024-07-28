@@ -21,10 +21,9 @@ import os
 import sumo_rl
 import sys
 
-from sumo_custom.sumo_custom_observation import CustomObservationFunction
-from sumo_custom.sumo_custom_reward import MaxSpeedRewardFunction
-from sumo_custom.sumo_custom_reward_avg_speed_limit import AverageSpeedLimitReward
-from sumo_custom.calculate_speed_control import CalculateSpeedError
+from sumo_utils.sumo_custom.sumo_custom_observation import CustomObservationFunction
+from sumo_utils.sumo_custom.sumo_custom_reward import CreateSumoReward
+from sumo_utils.sumo_custom.calculate_speed_control import CalculateSpeedError
 
 # Config Parser
 from marl_utils.MARLConfigParser import MARLConfigParser
@@ -45,8 +44,8 @@ if __name__ == "__main__":
     parser = MARLConfigParser()
     args = parser.parse_args()
     
-    # TODO: config
-    SPEED_LIMIT = 7.0   # The limit used to evaluate avg speed error (the g1 metric)
+    # The limit used to evaluate avg speed error (the g1 metric)
+    SPEED_LIMIT = args.sumo_average_speed_limit
 
     if not args.seed:
         args.seed = int(datetime.now()) 
@@ -64,47 +63,21 @@ if __name__ == "__main__":
 
     # Create the env
     # Sumo must be created using the sumo-rl module
-    # Note we have to use the parallel env here to conform to this implementation of dqn
-    # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-    if (args.sumo_reward == "custom"):
-        # Use the custom "max speed" reward function
-        print ( " > Evaluating model using CUSTOM reward")
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=True,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                reward_fn=MaxSpeedRewardFunction,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False)
-        
-    elif (args.sumo_reward == "custom-average-speed-limit"):
-        # Use the custom "avg speed limit" reward function
-        print ( " > Evaluating model using CUSTOM AVERAGE SPEED LIMIT reward")
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=True,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                add_system_info=True,       # Default is True
-                                add_per_agent_info=True,    # Default is True                                
-                                reward_fn=AverageSpeedLimitReward,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False) 
-    else:
-        print ( " > Evaluating model using standard reward: {}".format(args.sumo_reward))
-        # The 'queue' reward is being used here which returns the (negative) total number of vehicles stopped at all intersections
-        env = sumo_rl.parallel_env(net_file=args.net, 
-                                route_file=args.route,
-                                use_gui=True,
-                                max_green=args.max_green,
-                                min_green=args.min_green,
-                                num_seconds=args.sumo_seconds,
-                                reward_fn=args.sumo_reward,
-                                observation_class=CustomObservationFunction,
-                                sumo_warnings=False)  
+    # NOTE: we have to use the parallel env here to conform to this implementation of dqn
+    sumo_reward_function = CreateSumoReward(args=args)
+
+    env = sumo_rl.parallel_env(net_file=args.net, 
+                            route_file=args.route,
+                            use_gui=args.sumo_gui,
+                            max_green=args.max_green,
+                            min_green=args.min_green,
+                            num_seconds=args.sumo_seconds,
+                            delta_time=5,
+                            add_system_info=True,       # Default is True
+                            add_per_agent_info=True,    # Default is True                                       
+                            reward_fn=sumo_reward_function,
+                            observation_class=CustomObservationFunction,
+                            sumo_warnings=False)
 
     agents = env.possible_agents
     num_agents = len(env.possible_agents)
@@ -118,13 +91,13 @@ if __name__ == "__main__":
     episode_constraint_2 = {agent: 0 for agent in agents}   # Dictionary that maps each agent to its accumulated g2 metric
     
     print("\n=================== Environment Information ===================")
-    print(" > agents: {}".format(agents))
-    print(" > num_agents: {}".format(num_agents))
-    print(" > action_spaces: {}".format(action_spaces))
-    print(" > observation_spaces: {}".format(observation_spaces))
+    print(f" > agents: {agents}")
+    print(f" > num_agents: {num_agents}")
+    print(f" > action_spaces: {action_spaces}")
+    print(f" > observation_spaces: {observation_spaces}")
 
     # Construct the Q-Network model 
-    # Note the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
+    # NOTE: the dimensions of the model varies depending on if the parameter sharing algorithm was used or the normal independent 
     # DQN model was used
 
     if parameter_sharing_model:
@@ -140,7 +113,6 @@ if __name__ == "__main__":
         q_network = Actor(observation_space_shape, action_spaces[eg_agent].n).to(device) # In parameter sharing, all agents utilize the same q-network
         
         # Load the Q-network file
-        # TODO Update this to support loading policies from batch offline algo
         nn_file = "{}/{}.pt".format(nn_dir, analysis_steps)
         q_network.load_state_dict(torch.load(nn_file))
 
@@ -224,6 +196,8 @@ if __name__ == "__main__":
             print(f"    > TOTAL EPISODE REWARD: {system_episode_reward} using reward: {args.sumo_reward}")
             print(f"    > TOTAL EPISODE g1: {system_accumulated_g1} using speed limit: {SPEED_LIMIT}")
             print(f"    > TOTAL EPISODE g2: {system_accumulated_g2}")
+            for agent in agents:
+                print(f"     > Agent {agent} g1: {episode_constraint_1[agent]} g2: {episode_constraint_2[agent]}")
 
             break
 
