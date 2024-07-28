@@ -10,7 +10,7 @@ Usage:
 """
 
 import sumo_rl
-from sumo_custom_observation import CustomObservationFunction
+from sumo_custom.sumo_custom_observation import CustomObservationFunction
 
 # route = '/home/jmiceli/workspace/IndependentStudy/marl-experiments/nets/4x4-Lucas/4x4c1c2c1c2.rou.xml'
 # net_file = '/home/jmiceli/workspace/IndependentStudy/marl-experiments/nets/4x4-Lucas/4x4.net.xml'
